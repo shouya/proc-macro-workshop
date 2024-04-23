@@ -1,100 +1,153 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_quote, DeriveInput, Field, Type};
+use syn::{
+  parse::Parse, parse_quote, punctuated::Punctuated, Attribute, DeriveInput,
+  Field, Ident, Token, Type,
+};
+
+enum FieldKind {
+  Normal,
+  Optional,
+  Repeated,
+}
 
 struct BuilderField {
   field: Field,
-  optional_ty: Option<Type>,
+  input_ty: Type,
+  method_name: Ident,
+  kind: FieldKind,
 }
 
-impl From<Field> for BuilderField {
-  fn from(field: Field) -> Self {
-    let optional_ty = Self::parse_option_type(&field.ty);
-    Self { field, optional_ty }
+impl TryFrom<Field> for BuilderField {
+  type Error = syn::Error;
+  fn try_from(field: Field) -> Result<Self, Self::Error> {
+    let mut kind = FieldKind::Normal;
+    let mut input_ty = field.ty.clone();
+    let mut method_name = field.ident.clone().ok_or_else(|| {
+      syn::Error::new_spanned(&field, "named fields are required")
+    })?;
+
+    let repeated = Self::parse_repeated_type(&field)?;
+    let optional = Self::parse_option_type(&field.ty);
+
+    match (optional, repeated) {
+      (None, None) => {}
+      (Some(ty), None) => {
+        kind = FieldKind::Optional;
+        input_ty = ty;
+      }
+      (None, Some((ty, name))) => {
+        kind = FieldKind::Repeated;
+        input_ty = ty;
+        method_name = name;
+      }
+      (Some(_), Some(_)) => {
+        return Err(syn::Error::new_spanned(
+          &field,
+          "fields cannot be both optional and repeated",
+        ))
+      }
+    };
+
+    Ok(Self {
+      field,
+      input_ty,
+      method_name,
+      kind,
+    })
   }
 }
 
 impl BuilderField {
   // if ty is an optional type Option<T>, return Some(T). Otherwise return None.
   fn parse_option_type(ty: &Type) -> Option<Type> {
-    let Type::Path(syn::TypePath { qself: None, path }) = ty else {
-      return None;
-    };
-
-    let syn::Path { segments, .. } = path;
-
-    let segment = segments.last()?;
-
-    if segment.ident != "Option" {
-      return None;
-    };
-
-    let syn::PathArguments::AngleBracketed(
-      syn::AngleBracketedGenericArguments { ref args, .. },
-    ) = segment.arguments
-    else {
-      return None;
-    };
-
-    if args.len() != 1 {
-      return None;
-    }
-    let Some(syn::GenericArgument::Type(ty)) = args.first() else {
-      return None;
-    };
-
-    Some(ty.clone())
+    parse_generic_type(ty, "Option")
   }
 
-  fn ident(&self) -> syn::Ident {
+  fn parse_repeated_type(
+    field: &Field,
+  ) -> Result<Option<(Type, Ident)>, syn::Error> {
+    let each_names: Vec<syn::LitStr> = builder_attr_get(&field.attrs, "each")?;
+    if each_names.len() > 1 {
+      return Err(syn::Error::new_spanned(
+        each_names.first().unwrap(),
+        "multiple 'each' attributes are not allowed",
+      ));
+    }
+
+    let Some(each_name) = each_names.first() else {
+      return Ok(None);
+    };
+    let method_name = Ident::new(&each_name.value(), each_name.span());
+    let Some(ty) = parse_generic_type(&field.ty, "Vec") else {
+      return Err(syn::Error::new_spanned(&field.ty, "expected Vec<T> type"));
+    };
+
+    Ok(Some((ty, method_name)))
+  }
+
+  fn field_name(&self) -> syn::Ident {
     // unwrap is safe because we only deal with named fields
     self.field.ident.clone().unwrap()
   }
 
-  fn builder_field_ty(&self) -> Type {
-    if let Some(ty) = &self.optional_ty {
-      parse_quote! { Option<#ty> }
-    } else {
-      let ty = &self.field.ty;
-      parse_quote! { Option<#ty> }
-    }
+  fn builder_method_name(&self) -> syn::Ident {
+    self.method_name.clone()
   }
 
-  fn input_ty(&self) -> Type {
-    if let Some(ty) = &self.optional_ty {
-      ty.clone()
-    } else {
-      self.field.ty.clone()
+  fn builder_field_ty(&self) -> Type {
+    let input_ty = &self.input_ty;
+    match self.kind {
+      FieldKind::Normal => parse_quote! { Option<#input_ty> },
+      FieldKind::Optional => parse_quote! { Option<#input_ty> },
+      FieldKind::Repeated => parse_quote! { Vec<#input_ty> },
     }
   }
 
   fn builder_method(&self) -> TokenStream {
-    let name = self.ident();
-    let ty = self.input_ty();
+    let method_name = self.builder_method_name();
+    let field_name = self.field_name();
+    let ty = self.input_ty.clone();
+    let assignment = match self.kind {
+      FieldKind::Normal => quote! {self.#field_name = Some(value);},
+      FieldKind::Optional => quote! {self.#field_name = Some(value);},
+      FieldKind::Repeated => quote! {self.#field_name.push(value);},
+    };
 
     quote! {
-      pub fn #name(&mut self, #name: #ty) -> &mut Self {
-        self.#name = Some(#name);
+      pub fn #method_name(&mut self, value: #ty) -> &mut Self {
+        #assignment
         self
       }
     }
   }
 
-  fn check_not_none(&self) -> TokenStream {
-    let ident = self.ident();
+  fn validate(&self) -> TokenStream {
+    let field_name = self.field_name();
 
-    if self.optional_ty.is_some() {
-      return quote! {
-        let #ident = self.#ident.take();
-      };
+    match self.kind {
+      FieldKind::Normal => {
+        let err_msg = format!("missing \"{}\" field", field_name);
+        quote! {
+          let Some(#field_name) = self.#field_name.take() else {
+            return Err(std::boxed::Box::<dyn std::error::Error>::from(#err_msg));
+          };
+        }
+      }
+      FieldKind::Optional => {
+        quote! {let #field_name = self.#field_name.take();}
+      }
+      FieldKind::Repeated => {
+        quote! {let #field_name = std::mem::take(&mut self.#field_name); }
+      }
     }
+  }
 
-    let ident_str = ident.to_string();
-    let err_msg = format!("missing {} field", ident_str);
+  fn field_initializer(&self) -> TokenStream {
+    let field_name = self.field_name();
+    // Default::default() works for both Option and Vec.
     quote! {
-      let Some(#ident) = self.#ident.take() else {
-        return Err(std::boxed::Box::<dyn std::error::Error>::from(#err_msg));
-      };
+      #field_name: Default::default()
     }
   }
 }
@@ -133,9 +186,11 @@ impl TryFrom<DeriveInput> for BuilderInput {
     };
 
     let fields = match struct_data.fields {
-      syn::Fields::Named(fields) => {
-        fields.named.into_iter().map(BuilderField::from).collect()
-      }
+      syn::Fields::Named(fields) => fields
+        .named
+        .into_iter()
+        .map(BuilderField::try_from)
+        .collect::<Result<Vec<_>, _>>()?,
       _ => {
         return Err(syn::parse::Error::new_spanned(
           struct_data.fields,
@@ -157,21 +212,18 @@ impl BuilderInput {
     let builder_name = self.type_name();
     let generics = &self.generics;
     let name = &self.name;
-    let field_names = &self.field_names();
+    let field_initializers =
+      self.fields.iter().map(|field| field.field_initializer());
 
     quote! {
       impl #generics #name #generics {
         pub fn builder() -> #builder_name #generics {
           #builder_name {
-            #( #field_names: None ),*
+            #( #field_initializers ),*
           }
         }
       }
     }
-  }
-
-  fn field_names(&self) -> Vec<syn::Ident> {
-    self.fields.iter().map(|field| field.ident()).collect()
   }
 
   fn type_data(&self) -> TokenStream {
@@ -191,7 +243,7 @@ impl BuilderInput {
 
   fn fields(&self) -> TokenStream {
     let fields = self.fields.iter().map(|field| {
-      let name = &field.ident();
+      let name = &field.field_name();
       let ty = &field.builder_field_ty();
       quote! {
         #name: #ty
@@ -222,9 +274,9 @@ impl BuilderInput {
 
   fn build_method(&self) -> TokenStream {
     let name = &self.name;
-    let check_fields = self.fields.iter().map(|f| f.check_not_none());
+    let check_fields = self.fields.iter().map(|f| f.validate());
     let init_fields = self.fields.iter().map(|field| {
-      let ident = field.ident();
+      let ident = field.field_name();
       quote! {
         #ident,
       }
@@ -239,7 +291,7 @@ impl BuilderInput {
   }
 }
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
   let derive_input = syn::parse_macro_input!(input as DeriveInput);
   let builder_input = match BuilderInput::try_from(derive_input) {
@@ -258,4 +310,94 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
   };
 
   output.into()
+}
+
+struct AttrListItem<V> {
+  key: syn::Ident,
+  _eq: Token![=],
+  value: V,
+}
+
+impl<V> Parse for AttrListItem<V>
+where
+  V: Parse,
+{
+  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    let key = input.parse()?;
+    let _eq = input.parse()?;
+    let value = input.parse()?;
+
+    Ok(Self { key, _eq, value })
+  }
+}
+
+struct AttrList<V> {
+  items: Punctuated<AttrListItem<V>, Token![,]>,
+}
+
+impl<V> Parse for AttrList<V>
+where
+  V: Parse,
+{
+  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    let items = Punctuated::parse_terminated(input)?;
+    Ok(Self { items })
+  }
+}
+
+fn builder_attr_get<V: Parse>(
+  attrs: &Vec<Attribute>,
+  key: &str,
+) -> Result<Vec<V>, syn::Error> {
+  let mut values = vec![];
+  for attr in attrs {
+    let syn::Meta::List(syn::MetaList { path, tokens, .. }) = &attr.meta else {
+      continue;
+    };
+
+    if !path.is_ident("builder") {
+      continue;
+    }
+
+    let attr_list: AttrList<V> = syn::parse2(tokens.clone())?;
+    for item in attr_list.items.into_iter() {
+      if item.key == key {
+        values.push(item.value);
+      }
+    }
+  }
+
+  Ok(values)
+}
+
+// parses types like Vec<T>, Option<T>, etc into T
+fn parse_generic_type(ty: &Type, container: &str) -> Option<Type> {
+  let Type::Path(syn::TypePath { qself: None, path }) = ty else {
+    return None;
+  };
+
+  let syn::Path { segments, .. } = path;
+
+  let segment = segments.last()?;
+
+  if segment.ident != container {
+    return None;
+  };
+
+  let syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+    ref args,
+    ..
+  }) = segment.arguments
+  else {
+    return None;
+  };
+
+  if args.len() != 1 {
+    return None;
+  }
+  let Some(syn::GenericArgument::Type(ty)) = args.first() else {
+    return None;
+  };
+
+  Some(ty.clone())
 }
