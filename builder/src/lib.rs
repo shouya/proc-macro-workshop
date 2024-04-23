@@ -21,6 +21,8 @@ struct BuilderField {
 impl TryFrom<Field> for BuilderField {
   type Error = syn::Error;
   fn try_from(field: Field) -> Result<Self, Self::Error> {
+    builder_attrs_validate(&field.attrs, &["each"])?;
+
     let mut kind = FieldKind::Normal;
     let mut input_ty = field.ty.clone();
     let mut method_name = field.ident.clone().ok_or_else(|| {
@@ -343,6 +345,37 @@ where
     let items = Punctuated::parse_terminated(input)?;
     Ok(Self { items })
   }
+}
+
+fn builder_attrs_validate(
+  attrs: &Vec<Attribute>,
+  valid_keys: &[&str],
+) -> Result<(), syn::Error> {
+  for attr in attrs {
+    let syn::Meta::List(syn::MetaList { path, tokens, .. }) = &attr.meta else {
+      continue;
+    };
+
+    if !path.is_ident("builder") {
+      continue;
+    }
+
+    let attr_list: AttrList<TokenStream> = syn::parse2(tokens.clone())?;
+    for item in attr_list.items.into_iter() {
+      let key = item.key.to_string();
+      if !valid_keys.contains(&key.as_str()) {
+        return Err(syn::Error::new_spanned(
+          item.key,
+          format!(
+            "unrecognized key: {}, valid keys are: {:?}",
+            key, valid_keys
+          ),
+        ));
+      }
+    }
+  }
+
+  Ok(())
 }
 
 fn builder_attr_get<V: Parse>(
