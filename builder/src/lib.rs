@@ -100,9 +100,9 @@ impl BuilderField {
   fn builder_field_ty(&self) -> Type {
     let input_ty = &self.input_ty;
     match self.kind {
-      FieldKind::Normal => parse_quote! { Option<#input_ty> },
-      FieldKind::Optional => parse_quote! { Option<#input_ty> },
-      FieldKind::Repeated => parse_quote! { Vec<#input_ty> },
+      FieldKind::Normal => parse_quote! { std::option::Option<#input_ty> },
+      FieldKind::Optional => parse_quote! { std::option::Option<#input_ty> },
+      FieldKind::Repeated => parse_quote! { std::vec::Vec<#input_ty> },
     }
   }
 
@@ -111,8 +111,12 @@ impl BuilderField {
     let field_name = self.field_name();
     let ty = self.input_ty.clone();
     let assignment = match self.kind {
-      FieldKind::Normal => quote! {self.#field_name = Some(value);},
-      FieldKind::Optional => quote! {self.#field_name = Some(value);},
+      FieldKind::Normal => {
+        quote! {self.#field_name = std::option::Option::Some(value);}
+      }
+      FieldKind::Optional => {
+        quote! {self.#field_name = std::option::Option::Some(value);}
+      }
       FieldKind::Repeated => quote! {self.#field_name.push(value);},
     };
 
@@ -131,7 +135,7 @@ impl BuilderField {
       FieldKind::Normal => {
         let err_msg = format!("missing \"{}\" field", field_name);
         quote! {
-          let Some(#field_name) = self.#field_name.take() else {
+          let std::option::Option::Some(#field_name) = self.#field_name.take() else {
             return Err(std::boxed::Box::<dyn std::error::Error>::from(#err_msg));
           };
         }
@@ -149,7 +153,7 @@ impl BuilderField {
     let field_name = self.field_name();
     // Default::default() works for both Option and Vec.
     quote! {
-      #field_name: Default::default()
+      #field_name: std::default::Default::default()
     }
   }
 }
@@ -285,9 +289,9 @@ impl BuilderInput {
     });
 
     quote! {
-      pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
+      pub fn build(&mut self) -> std::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
         #( #check_fields )*
-        Ok(#name {#( #init_fields )*})
+        std::result::Result::Ok(#name {#( #init_fields )*})
       }
     }
   }

@@ -1,3 +1,4 @@
+#![allow(unused)]
 // Does your macro still work if some of the standard library prelude item names
 // mean something different in the caller's code?
 //
@@ -24,7 +25,7 @@ type Box = ();
 
 #[derive(Builder)]
 pub struct Command {
-    executable: String,
+  executable: String,
 }
 
 fn main() {}
