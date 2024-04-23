@@ -24,6 +24,7 @@
 use derive_builder::Builder;
 
 #[derive(Builder)]
+#[allow(dead_code)]
 pub struct Command {
   executable: String,
   args: Vec<String>,

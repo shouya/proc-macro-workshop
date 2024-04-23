@@ -134,7 +134,7 @@ impl BuilderInput {
       let err_msg = format!("missing {} field", ident_str);
       quote! {
         let Some(#ident) = self.#ident else {
-          return Err(#err_msg);
+          return Err(std::boxed::Box::<dyn std::error::Error>::from(#err_msg));
         };
       }
     };
@@ -149,9 +149,7 @@ impl BuilderInput {
     quote! {
       pub fn build(self) -> Result<#name, Box<dyn std::error::Error>> {
         #( #check_fields )*
-        #name {
-          #( #init_fields )*
-        }
+        Ok(#name {#( #init_fields )*})
       }
     }
   }
@@ -161,7 +159,7 @@ impl BuilderInput {
     let ty = &field.ty;
 
     quote! {
-      pub fn #name(mut self, #name: #ty) -> Self {
+      pub fn #name(&mut self, #name: #ty) -> &mut Self {
         self.#name = Some(#name);
         self
       }
