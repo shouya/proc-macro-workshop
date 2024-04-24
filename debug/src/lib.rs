@@ -1,13 +1,14 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-  spanned::Spanned, visit::Visit, Attribute, DeriveInput, Generics, Ident, Type,
+  spanned::Spanned, visit::Visit, Attribute, DeriveInput, Expr, Generics,
+  Ident, Type,
 };
 
 struct DebugField {
   name: Ident,
   custom_format: Option<String>,
-  #[allow(unused)] // for now.
+  extra_bounds: Option<TokenStream>,
   ty: syn::Type,
 }
 
@@ -27,6 +28,10 @@ impl DebugField {
       }
     }
   }
+
+  fn extra_bounds(&self) -> Option<TokenStream> {
+    self.extra_bounds.clone()
+  }
 }
 
 impl TryFrom<syn::Field> for DebugField {
@@ -36,11 +41,13 @@ impl TryFrom<syn::Field> for DebugField {
     let name = field.ident.unwrap();
     let ty = field.ty;
     let custom_format = parse_custom_format(&field.attrs)?;
+    let extra_bounds = parse_extra_bounds(&field.attrs)?;
 
     Ok(DebugField {
       name,
       ty,
       custom_format,
+      extra_bounds,
     })
   }
 }
@@ -49,6 +56,7 @@ struct DebugInput {
   name: Ident,
   generics: Generics,
   generics_sans_bounds: Generics,
+  extra_bounds: Option<TokenStream>,
   fields: Vec<DebugField>,
 }
 
@@ -59,6 +67,7 @@ impl TryFrom<DeriveInput> for DebugInput {
     let span = input.span();
     let name = input.ident;
     let generics = input.generics;
+    let extra_bounds = parse_extra_bounds(&input.attrs)?;
     let generics_sans_bounds = remove_bounds(generics.clone());
     let syn::Data::Struct(strt) = input.data else {
       return Err(syn::Error::new(
@@ -85,6 +94,7 @@ impl TryFrom<DeriveInput> for DebugInput {
       fields,
       generics,
       generics_sans_bounds,
+      extra_bounds,
     })
   }
 }
@@ -96,12 +106,15 @@ impl DebugInput {
       syn::LitStr::new(self.name.to_string().as_str(), self.name.span());
     let generics = &self.generics;
     let generics_sans_bounds = &self.generics_sans_bounds;
-    let generic_bounds = self.generic_bounds();
+    let generic_bounds = match self.generic_bounds() {
+      Some(bounds) => quote! { where #bounds },
+      None => quote! {},
+    };
     let fmt_fields = self.fields.iter().map(|f| f.impl_debug_field());
 
     quote! {
       impl #generics std::fmt::Debug for #name #generics_sans_bounds
-        where #(#generic_bounds),*
+        #generic_bounds
       {
         fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
           let mut fmt = fmt.debug_struct(#name_str);
@@ -112,25 +125,44 @@ impl DebugInput {
     }
   }
 
-  fn generic_bounds(&self) -> Vec<TokenStream> {
+  fn generic_bounds(&self) -> Option<TokenStream> {
+    if let Some(bounds) = self.extra_bounds() {
+      return Some(bounds);
+    }
+
     let type_params: Vec<_> = self
       .generics
       .type_params()
       .map(|p| p.ident.clone())
       .collect();
 
-    let type_args = self
+    let bounds: Vec<_> = self
       .fields
       .iter()
-      .flat_map(|f| nested_generic_args(&f.ty, &type_params));
+      .flat_map(|f| nested_generic_args(&f.ty, &type_params))
+      .map(|ty| quote! {#ty: std::fmt::Debug})
+      .collect();
 
-    let bounds = type_args.map(|ty| {
-      quote! {
-        #ty: std::fmt::Debug
-      }
-    });
+    if bounds.is_empty() {
+      None
+    } else {
+      Some(quote! {#(#bounds),*})
+    }
+  }
 
-    bounds.collect()
+  fn extra_bounds(&self) -> Option<TokenStream> {
+    let bounds = self
+      .fields
+      .iter()
+      .filter_map(|f| f.extra_bounds())
+      .chain(self.extra_bounds.clone())
+      .collect::<Vec<_>>();
+
+    if bounds.is_empty() {
+      None
+    } else {
+      Some(quote! {#(#bounds),*})
+    }
   }
 }
 
@@ -173,6 +205,31 @@ fn parse_custom_format(
   }
 
   Ok(None)
+}
+
+fn parse_extra_bounds(
+  attrs: &Vec<Attribute>,
+) -> Result<Option<TokenStream>, syn::Error> {
+  let exprs = debug_attr_get(attrs, "bound")?;
+  let mut bounds = vec![];
+  for expr in exprs {
+    let Expr::Lit(syn::ExprLit { lit, .. }) = expr else {
+      return Err(syn::Error::new(expr.span(), "expected a literal"));
+    };
+
+    let syn::Lit::Str(lit) = lit else {
+      return Err(syn::Error::new(lit.span(), "expected a string literal"));
+    };
+
+    let tokens: TokenStream = syn::parse_str(&lit.value().as_str())?;
+    bounds.push(tokens);
+  }
+
+  if bounds.is_empty() {
+    Ok(None)
+  } else {
+    Ok(Some(quote! { #(#bounds),* }))
+  }
 }
 
 fn remove_bounds(mut generics: Generics) -> Generics {
@@ -230,4 +287,28 @@ fn nested_generic_args(ty: &Type, type_params: &Vec<Ident>) -> Vec<Type> {
   };
   extractor.visit_type(ty);
   extractor.types
+}
+
+fn debug_attr_get(
+  attrs: &Vec<Attribute>,
+  key: &str,
+) -> Result<Vec<Expr>, syn::Error> {
+  let mut values = vec![];
+  for attr in attrs {
+    let syn::Meta::List(syn::MetaList { path, tokens, .. }) = &attr.meta else {
+      continue;
+    };
+
+    if !path.is_ident("debug") {
+      continue;
+    }
+
+    if let Ok(kv) = syn::parse2::<syn::MetaNameValue>(tokens.clone()) {
+      if kv.path.is_ident(key) {
+        values.push(kv.value);
+      }
+    }
+  }
+
+  Ok(values)
 }
