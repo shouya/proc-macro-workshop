@@ -1,6 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{spanned::Spanned, Attribute, DeriveInput, Ident};
+use syn::{
+  parse_quote, spanned::Spanned, Attribute, DeriveInput, Generics, Ident,
+};
 
 struct DebugField {
   name: Ident,
@@ -45,6 +47,8 @@ impl TryFrom<syn::Field> for DebugField {
 
 struct DebugInput {
   name: Ident,
+  generics: Generics,
+  bounds: Generics,
   fields: Vec<DebugField>,
 }
 
@@ -54,6 +58,8 @@ impl TryFrom<DeriveInput> for DebugInput {
   fn try_from(input: DeriveInput) -> Result<Self, Self::Error> {
     let span = input.span();
     let name = input.ident;
+    let generics = input.generics;
+    let bounds = add_debug_bound(&generics);
     let syn::Data::Struct(strt) = input.data else {
       return Err(syn::Error::new(
         span,
@@ -74,7 +80,12 @@ impl TryFrom<DeriveInput> for DebugInput {
       .map(|f| f.try_into())
       .collect::<Result<Vec<DebugField>, _>>()?;
 
-    Ok(DebugInput { name, fields })
+    Ok(DebugInput {
+      name,
+      fields,
+      generics,
+      bounds,
+    })
   }
 }
 
@@ -83,11 +94,12 @@ impl DebugInput {
     let name = &self.name;
     let name_str =
       syn::LitStr::new(self.name.to_string().as_str(), self.name.span());
-
+    let generics = &self.generics;
+    let bounds = &self.bounds;
     let fmt_fields = self.fields.iter().map(|f| f.impl_debug_field());
 
     quote! {
-      impl std::fmt::Debug for #name {
+      impl #bounds std::fmt::Debug for #name #generics {
         fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
           let mut fmt = fmt.debug_struct(#name_str);
           #( #fmt_fields );*
@@ -137,4 +149,13 @@ fn parse_custom_format(
   }
 
   Ok(None)
+}
+
+fn add_debug_bound(generics: &Generics) -> Generics {
+  let mut generics = generics.clone();
+  for type_param in generics.type_params_mut() {
+    let bound = parse_quote! { std::fmt::Debug };
+    type_param.bounds.push(syn::TypeParamBound::Trait(bound));
+  }
+  generics
 }
