@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{spanned::Spanned, DeriveInput, Ident};
+use syn::{spanned::Spanned, Attribute, DeriveInput, Ident};
 
 struct DebugField {
   name: Ident,
@@ -33,8 +33,7 @@ impl TryFrom<syn::Field> for DebugField {
   fn try_from(field: syn::Field) -> Result<Self, Self::Error> {
     let name = field.ident.unwrap();
     let ty = field.ty;
-    // TODO: support custom format later
-    let custom_format = None;
+    let custom_format = parse_custom_format(&field.attrs)?;
 
     Ok(DebugField {
       name,
@@ -99,7 +98,7 @@ impl DebugInput {
   }
 }
 
-#[proc_macro_derive(CustomDebug)]
+#[proc_macro_derive(CustomDebug, attributes(debug))]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
   let input = syn::parse_macro_input!(input as DeriveInput);
   let input = match DebugInput::try_from(input) {
@@ -109,4 +108,33 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
   let output = input.impl_debug();
   output.into()
+}
+
+fn parse_custom_format(
+  attrs: &Vec<Attribute>,
+) -> Result<Option<String>, syn::Error> {
+  for attr in attrs {
+    let syn::Meta::NameValue(name_value) = &attr.meta else {
+      continue;
+    };
+
+    if !name_value.path.is_ident("debug") {
+      continue;
+    }
+
+    let syn::Expr::Lit(lit) = &name_value.value else {
+      return Err(syn::Error::new(
+        name_value.span(),
+        "expected a string literal",
+      ));
+    };
+
+    let syn::Lit::Str(lit) = &lit.lit else {
+      return Err(syn::Error::new(lit.span(), "expected a string literal"));
+    };
+
+    return Ok(Some(lit.value()));
+  }
+
+  Ok(None)
 }
