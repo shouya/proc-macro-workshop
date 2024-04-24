@@ -1,8 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{
-  parse_quote, spanned::Spanned, Attribute, DeriveInput, Generics, Ident,
-};
+use syn::{spanned::Spanned, Attribute, DeriveInput, Generics, Ident};
 
 struct DebugField {
   name: Ident,
@@ -27,6 +25,13 @@ impl DebugField {
       }
     }
   }
+
+  fn field_bound(&self) -> TokenStream {
+    let ty = &self.ty;
+    quote! {
+      #ty: std::fmt::Debug
+    }
+  }
 }
 
 impl TryFrom<syn::Field> for DebugField {
@@ -48,7 +53,6 @@ impl TryFrom<syn::Field> for DebugField {
 struct DebugInput {
   name: Ident,
   generics: Generics,
-  bounds: Generics,
   fields: Vec<DebugField>,
 }
 
@@ -59,7 +63,6 @@ impl TryFrom<DeriveInput> for DebugInput {
     let span = input.span();
     let name = input.ident;
     let generics = input.generics;
-    let bounds = add_debug_bound(&generics);
     let syn::Data::Struct(strt) = input.data else {
       return Err(syn::Error::new(
         span,
@@ -84,7 +87,6 @@ impl TryFrom<DeriveInput> for DebugInput {
       name,
       fields,
       generics,
-      bounds,
     })
   }
 }
@@ -95,11 +97,13 @@ impl DebugInput {
     let name_str =
       syn::LitStr::new(self.name.to_string().as_str(), self.name.span());
     let generics = &self.generics;
-    let bounds = &self.bounds;
     let fmt_fields = self.fields.iter().map(|f| f.impl_debug_field());
+    let field_bounds = self.fields.iter().map(|f| f.field_bound());
 
     quote! {
-      impl #bounds std::fmt::Debug for #name #generics {
+      impl #generics std::fmt::Debug for #name #generics
+        where #(#field_bounds),*
+      {
         fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
           let mut fmt = fmt.debug_struct(#name_str);
           #( #fmt_fields );*
@@ -149,13 +153,4 @@ fn parse_custom_format(
   }
 
   Ok(None)
-}
-
-fn add_debug_bound(generics: &Generics) -> Generics {
-  let mut generics = generics.clone();
-  for type_param in generics.type_params_mut() {
-    let bound = parse_quote! { std::fmt::Debug };
-    type_param.bounds.push(syn::TypeParamBound::Trait(bound));
-  }
-  generics
 }
