@@ -1,6 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{spanned::Spanned, Attribute, DeriveInput, Generics, Ident};
+use syn::{
+  spanned::Spanned, visit::Visit, Attribute, DeriveInput, Generics, Ident, Type,
+};
 
 struct DebugField {
   name: Ident,
@@ -23,13 +25,6 @@ impl DebugField {
       quote! {
         let mut fmt = fmt.field(#name_str, &self.#name);
       }
-    }
-  }
-
-  fn field_bound(&self) -> TokenStream {
-    let ty = &self.ty;
-    quote! {
-      #ty: std::fmt::Debug
     }
   }
 }
@@ -101,12 +96,12 @@ impl DebugInput {
       syn::LitStr::new(self.name.to_string().as_str(), self.name.span());
     let generics = &self.generics;
     let generics_sans_bounds = &self.generics_sans_bounds;
+    let generic_bounds = self.generic_bounds();
     let fmt_fields = self.fields.iter().map(|f| f.impl_debug_field());
-    let field_bounds = self.fields.iter().map(|f| f.field_bound());
 
     quote! {
       impl #generics std::fmt::Debug for #name #generics_sans_bounds
-        where #(#field_bounds),*
+        where #(#generic_bounds),*
       {
         fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
           let mut fmt = fmt.debug_struct(#name_str);
@@ -115,6 +110,27 @@ impl DebugInput {
         }
       }
     }
+  }
+
+  fn generic_bounds(&self) -> Vec<TokenStream> {
+    let type_params: Vec<_> = self
+      .generics
+      .type_params()
+      .map(|p| p.ident.clone())
+      .collect();
+
+    let type_args = self
+      .fields
+      .iter()
+      .flat_map(|f| nested_generic_args(&f.ty, &type_params));
+
+    let bounds = type_args.map(|ty| {
+      quote! {
+        #ty: std::fmt::Debug
+      }
+    });
+
+    bounds.collect()
   }
 }
 
@@ -174,4 +190,44 @@ fn remove_bounds(mut generics: Generics) -> Generics {
   }
 
   generics
+}
+
+// including type itself
+struct NestedGenericArgExtractor<'a> {
+  type_params: &'a Vec<Ident>,
+  types: Vec<Type>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for NestedGenericArgExtractor<'_> {
+  fn visit_type(&mut self, node: &'ast Type) {
+    let Type::Path(path) = node else {
+      return;
+    };
+
+    if let Some(first_seg) = path.path.segments.first() {
+      // We only collect types that are part of generic type
+      // parameters. This includes formats like T, T::Value, etc as
+      // long as T is a generic type parameter.
+      if self.type_params.contains(&first_seg.ident) {
+        self.types.push(node.clone());
+      }
+    }
+
+    for seg in &path.path.segments {
+      if seg.ident == "PhantomData" {
+        continue;
+      }
+
+      syn::visit::visit_path_segment(self, seg);
+    }
+  }
+}
+
+fn nested_generic_args(ty: &Type, type_params: &Vec<Ident>) -> Vec<Type> {
+  let mut extractor = NestedGenericArgExtractor {
+    types: vec![],
+    type_params,
+  };
+  extractor.visit_type(ty);
+  extractor.types
 }
