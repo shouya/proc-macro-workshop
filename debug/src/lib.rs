@@ -53,6 +53,7 @@ impl TryFrom<syn::Field> for DebugField {
 struct DebugInput {
   name: Ident,
   generics: Generics,
+  generics_sans_bounds: Generics,
   fields: Vec<DebugField>,
 }
 
@@ -63,6 +64,7 @@ impl TryFrom<DeriveInput> for DebugInput {
     let span = input.span();
     let name = input.ident;
     let generics = input.generics;
+    let generics_sans_bounds = remove_bounds(generics.clone());
     let syn::Data::Struct(strt) = input.data else {
       return Err(syn::Error::new(
         span,
@@ -87,6 +89,7 @@ impl TryFrom<DeriveInput> for DebugInput {
       name,
       fields,
       generics,
+      generics_sans_bounds,
     })
   }
 }
@@ -97,11 +100,12 @@ impl DebugInput {
     let name_str =
       syn::LitStr::new(self.name.to_string().as_str(), self.name.span());
     let generics = &self.generics;
+    let generics_sans_bounds = &self.generics_sans_bounds;
     let fmt_fields = self.fields.iter().map(|f| f.impl_debug_field());
     let field_bounds = self.fields.iter().map(|f| f.field_bound());
 
     quote! {
-      impl #generics std::fmt::Debug for #name #generics
+      impl #generics std::fmt::Debug for #name #generics_sans_bounds
         where #(#field_bounds),*
       {
         fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -153,4 +157,21 @@ fn parse_custom_format(
   }
 
   Ok(None)
+}
+
+fn remove_bounds(mut generics: Generics) -> Generics {
+  for param in generics.type_params_mut() {
+    param.bounds.clear();
+  }
+
+  for param in generics.lifetimes_mut() {
+    param.bounds.clear();
+  }
+
+  for param in generics.const_params_mut() {
+    param.eq_token = None;
+    param.default = None;
+  }
+
+  generics
 }

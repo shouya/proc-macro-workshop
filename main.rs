@@ -7,22 +7,26 @@
 //     $ cargo run
 
 use derive_debug::CustomDebug;
+use std::fmt::Debug;
 
-#[derive(CustomDebug)]
-pub struct Field<T> {
-  value: T,
-  #[debug = "0b{:08b}"]
-  bitmask: u8,
+pub trait Trait {
+  type Value;
 }
 
+#[derive(CustomDebug)]
+pub struct Field<T: Trait> {
+  values: Vec<T::Value>,
+}
+
+fn assert_debug<F: Debug>() {}
+
 fn main() {
-  let f = Field {
-    value: "F",
-    bitmask: 0b00011100,
-  };
+  // Does not implement Debug, but its associated type does.
+  struct Id;
 
-  let debug = format!("{:?}", f);
-  let expected = r#"Field { value: "F", bitmask: 0b00011100 }"#;
+  impl Trait for Id {
+    type Value = u8;
+  }
 
-  assert_eq!(debug, expected);
+  assert_debug::<Field<Id>>();
 }
