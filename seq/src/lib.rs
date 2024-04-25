@@ -1,8 +1,8 @@
-use proc_macro2::{Literal, Span, TokenStream, TokenTree};
+use proc_macro2::{Literal, Punct, Span, TokenStream, TokenTree};
 use quote::{quote_spanned, ToTokens};
 use syn::{
-  braced, parse::Parse, parse_macro_input, parse_quote_spanned,
-  spanned::Spanned, token::Brace, LitInt, Token,
+  braced, parenthesized, parse::Parse, parse_macro_input, parse_quote_spanned,
+  punctuated::Punctuated, spanned::Spanned, token::Brace, LitInt, Token,
 };
 
 #[allow(dead_code)]
@@ -47,11 +47,16 @@ impl SeqInput {
   fn repeat_body(&self) -> syn::Result<TokenStream> {
     let values = range_values(&self.range)?;
     let var = self.var.to_string();
-    let repetitions = values
-      .into_iter()
-      .map(|val| self.body.clone().sub(&var, val));
 
-    Ok(quote_spanned!(self.body.span() => #( #repetitions )*))
+    if self.body.contains_repeat_section() {
+      let new_body = self.body.clone().repeat(&var, &values);
+      Ok(new_body.into_token_stream())
+    } else {
+      let bodies = values
+        .into_iter()
+        .map(|val| self.body.clone().sub(&var, val));
+      Ok(quote_spanned!(self.body.span() => #( #bodies )*))
+    }
   }
 }
 
@@ -123,11 +128,76 @@ impl ToTokens for PasteId {
 }
 
 #[derive(Debug, Clone)]
+struct RepeatSection {
+  pound: Token![#],
+  parens: syn::token::Paren,
+  body: Body,
+  separator: Option<Punct>,
+  star: Token![*],
+}
+
+impl RepeatSection {
+  fn repeat(self, var: &str, values: &[u64]) -> TokenStream {
+    let mut repetitions: Punctuated<Body, Option<_>> = values
+      .iter()
+      .map(|val| self.body.clone().sub(var, *val))
+      .map(|body| {
+        syn::punctuated::Pair::Punctuated(body, self.separator.clone())
+      })
+      .collect::<Punctuated<_, _>>();
+
+    repetitions.pop_punct();
+
+    repetitions.into_token_stream()
+  }
+}
+
+impl Parse for RepeatSection {
+  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    let pound = input.parse()?;
+    let body;
+    let parens = parenthesized!(body in input);
+    let body = body.parse()?;
+    let separator = if input.peek(Token![*]) {
+      None
+    } else {
+      input.parse()?
+    };
+    let star = input.parse()?;
+
+    Ok(RepeatSection {
+      pound,
+      parens,
+      body,
+      separator,
+      star,
+    })
+  }
+}
+
+impl ToTokens for RepeatSection {
+  fn to_tokens(&self, tokens: &mut TokenStream) {
+    self.pound.to_tokens(tokens);
+    self.parens.surround(tokens, |tokens| {
+      self.body.to_tokens(tokens);
+    });
+    self.star.to_tokens(tokens);
+  }
+}
+
+#[derive(Debug, Clone)]
 enum BodyToken {
+  // standard TokenTree token
   Group(proc_macro2::Delimiter, Span, Body),
   Ident(proc_macro2::Ident),
   Literal(proc_macro2::Literal),
   Punct(proc_macro2::Punct),
+
+  // when the converted stream doesn't match any of the above
+  Any(TokenStream),
+
+  // special tokens
+  RepeatSection(RepeatSection),
   PasteId(PasteId),
 }
 
@@ -158,6 +228,9 @@ impl Parse for BodyToken {
     // parse for special cases
     if input.fork().parse::<PasteId>().is_ok() {
       return Ok(Self::PasteId(input.parse()?));
+    }
+    if input.fork().parse::<RepeatSection>().is_ok() {
+      return Ok(Self::RepeatSection(input.parse()?));
     }
 
     input.step(|cursor| match cursor.token_tree() {
@@ -195,7 +268,11 @@ impl ToTokens for BodyToken {
       BodyToken::Ident(ident) => ident.to_tokens(tokens),
       BodyToken::Literal(literal) => literal.to_tokens(tokens),
       BodyToken::Punct(punct) => punct.to_tokens(tokens),
+      BodyToken::Any(stream) => stream.to_tokens(tokens),
       BodyToken::PasteId(paste_id) => paste_id.to_tokens(tokens),
+      BodyToken::RepeatSection(repeat_section) => {
+        repeat_section.to_tokens(tokens);
+      }
     }
   }
 }
@@ -224,6 +301,26 @@ impl ToTokens for Body {
 }
 
 impl Body {
+  fn repeat(self, var: &str, values: &[u64]) -> Self {
+    let stream = self
+      .stream
+      .into_iter()
+      .map(|token| match token {
+        BodyToken::RepeatSection(repeat_section) => {
+          let stream = repeat_section.repeat(var, values);
+          BodyToken::Any(stream)
+        }
+        BodyToken::Group(delim, span, body) => {
+          let body = body.repeat(var, values);
+          BodyToken::Group(delim, span, body)
+        }
+        other => other,
+      })
+      .collect();
+
+    Self { stream }
+  }
+
   fn sub(self, var: &str, value: u64) -> Self {
     let stream = self
       .stream
@@ -232,5 +329,13 @@ impl Body {
       .collect();
 
     Self { stream }
+  }
+
+  fn contains_repeat_section(&self) -> bool {
+    self.stream.iter().any(|token| match token {
+      BodyToken::RepeatSection(_) => true,
+      BodyToken::Group(_, _, body) => body.contains_repeat_section(),
+      _ => false,
+    })
   }
 }
