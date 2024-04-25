@@ -1,4 +1,4 @@
-use proc_macro2::{Literal, TokenStream, TokenTree};
+use proc_macro2::{Literal, Span, TokenStream, TokenTree};
 use quote::{quote_spanned, ToTokens};
 use syn::{
   braced, parse::Parse, parse_macro_input, parse_quote_spanned,
@@ -12,7 +12,7 @@ struct SeqInput {
   in_token: Token![in],
   range: syn::ExprRange,
   brace_token: Brace,
-  body: TokenStream,
+  body: Body,
 }
 
 impl Parse for SeqInput {
@@ -47,10 +47,9 @@ impl SeqInput {
   fn repeat_body(&self) -> syn::Result<TokenStream> {
     let values = range_values(&self.range)?;
     let var = self.var.to_string();
-    let repetitions = values.into_iter().map(|val| {
-      let lit = TokenTree::Literal(Literal::u64_unsuffixed(val));
-      substitute(self.body.clone(), &var, &lit)
-    });
+    let repetitions = values
+      .into_iter()
+      .map(|val| self.body.clone().sub(&var, val));
 
     Ok(quote_spanned!(self.body.span() => #( #repetitions )*))
   }
@@ -81,22 +80,157 @@ fn range_values(
   Ok(values)
 }
 
-fn substitute(input: TokenStream, var: &str, value: &TokenTree) -> TokenStream {
-  input
-    .into_iter()
-    .map(|token| match token {
-      TokenTree::Group(group) => {
-        let span = group.span();
-        let new_stream = substitute(group.stream(), var, value);
-        let mut new_group =
-          proc_macro2::Group::new(group.delimiter(), new_stream);
-        // without setting span here the span will take on the span of
-        // the call site, i.e. the seq macro invocation
-        new_group.set_span(span);
-        TokenTree::Group(new_group)
-      }
-      TokenTree::Ident(ident) if ident == var => value.clone(),
-      other => other,
+#[derive(Debug, Clone)]
+struct PasteId {
+  ident: syn::Ident,
+  tilde: Token![~],
+  var: syn::Ident,
+}
+
+impl PasteId {
+  fn span(&self) -> Span {
+    self.ident.span()
+  }
+
+  fn sub(self, var: &str, value: u64) -> BodyToken {
+    if self.var == var {
+      let span = self.span();
+      let name = format!("{}{}", self.ident, value);
+      let new_ident = syn::Ident::new(&name, span);
+      BodyToken::Ident(new_ident)
+    } else {
+      BodyToken::PasteId(self.clone())
+    }
+  }
+}
+
+impl Parse for PasteId {
+  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    Ok(PasteId {
+      ident: input.parse()?,
+      tilde: input.parse()?,
+      var: input.parse()?,
     })
-    .collect()
+  }
+}
+
+impl ToTokens for PasteId {
+  fn to_tokens(&self, tokens: &mut TokenStream) {
+    self.ident.to_tokens(tokens);
+    self.tilde.to_tokens(tokens);
+    self.var.to_tokens(tokens);
+  }
+}
+
+#[derive(Debug, Clone)]
+enum BodyToken {
+  Group(proc_macro2::Delimiter, Span, Body),
+  Ident(proc_macro2::Ident),
+  Literal(proc_macro2::Literal),
+  Punct(proc_macro2::Punct),
+  PasteId(PasteId),
+}
+
+impl BodyToken {
+  fn sub(self, var: &str, value: u64) -> Self {
+    match self {
+      BodyToken::Group(delim, span, body) => {
+        let body = body.sub(var, value);
+        BodyToken::Group(delim, span, body)
+      }
+      BodyToken::Ident(ident) => {
+        if ident == var {
+          let mut lit = Literal::u64_unsuffixed(value);
+          lit.set_span(ident.span());
+          BodyToken::Literal(lit)
+        } else {
+          BodyToken::Ident(ident)
+        }
+      }
+      BodyToken::PasteId(paste_id) => paste_id.sub(var, value),
+      other => other,
+    }
+  }
+}
+
+impl Parse for BodyToken {
+  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    // parse for special cases
+    if input.fork().parse::<PasteId>().is_ok() {
+      return Ok(Self::PasteId(input.parse()?));
+    }
+
+    input.step(|cursor| match cursor.token_tree() {
+      None => Err(cursor.error("unexpected end of input")),
+      Some((TokenTree::Ident(ident), rest)) => {
+        Ok((BodyToken::Ident(ident), rest))
+      }
+      Some((TokenTree::Literal(literal), rest)) => {
+        Ok((BodyToken::Literal(literal), rest))
+      }
+      Some((TokenTree::Punct(punct), rest)) => {
+        Ok((BodyToken::Punct(punct), rest))
+      }
+      Some((TokenTree::Group(group), rest)) => {
+        match syn::parse2(group.stream()) {
+          Ok(body) => Ok((
+            BodyToken::Group(group.delimiter(), group.span(), body),
+            rest,
+          )),
+          Err(e) => Err(syn::Error::new(group.span(), e)),
+        }
+      }
+    })
+  }
+}
+
+impl ToTokens for BodyToken {
+  fn to_tokens(&self, tokens: &mut TokenStream) {
+    match self {
+      BodyToken::Group(delim, span, body) => {
+        let mut group = proc_macro2::Group::new(*delim, body.to_token_stream());
+        group.set_span(*span);
+        group.to_tokens(tokens);
+      }
+      BodyToken::Ident(ident) => ident.to_tokens(tokens),
+      BodyToken::Literal(literal) => literal.to_tokens(tokens),
+      BodyToken::Punct(punct) => punct.to_tokens(tokens),
+      BodyToken::PasteId(paste_id) => paste_id.to_tokens(tokens),
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+struct Body {
+  stream: Vec<BodyToken>,
+}
+
+impl Parse for Body {
+  fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+    let mut stream = vec![];
+    while !input.is_empty() {
+      stream.push(input.parse()?);
+    }
+    Ok(Self { stream })
+  }
+}
+
+impl ToTokens for Body {
+  fn to_tokens(&self, tokens: &mut TokenStream) {
+    for token in &self.stream {
+      token.to_tokens(tokens);
+    }
+  }
+}
+
+impl Body {
+  fn sub(self, var: &str, value: u64) -> Self {
+    let stream = self
+      .stream
+      .into_iter()
+      .map(|token| token.sub(var, value))
+      .collect();
+
+    Self { stream }
+  }
 }
