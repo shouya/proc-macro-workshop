@@ -174,10 +174,7 @@ fn pat_to_names(pat: &Pat) -> syn::Result<Vec<Key>> {
         .flatten()
         .collect::<Vec<_>>(),
     ),
-    _ => {
-      dbg!(&pat);
-      Err(Error::new(pat.span(), "unsupported by #[sorted]"))
-    }
+    _ => Err(Error::new(pat.span(), "unsupported by #[sorted]")),
   }
 }
 
