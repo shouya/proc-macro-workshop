@@ -1,21 +1,16 @@
 use std::fmt::Display;
 
 use proc_macro2::{Span, TokenStream};
-use quote::ToTokens;
+use quote::{quote, ToTokens};
 use syn::{
-  parse::Parse, parse_macro_input, spanned::Spanned, Error, Ident, Pat, Path,
+  parse::Parse, parse_macro_input, spanned::Spanned, visit_mut::VisitMut,
+  Error, Ident, Pat, Path,
 };
 
 #[derive(Debug, Clone)]
 struct Key {
   name: String,
   span: Span,
-}
-
-impl ToTokens for Key {
-  fn to_tokens(&self, tokens: &mut TokenStream) {
-    self.name.to_tokens(tokens)
-  }
 }
 
 impl Display for Key {
@@ -102,10 +97,21 @@ impl SortedInput {
       SortedInput::Match(expr_match) => expr_match
         .arms
         .iter()
-        .flat_map(|a| pat_to_names(&a.pat).into_iter())
+        .flat_map(|a| pat_to_names(&a.pat))
         .map(Key::from)
         .collect(),
     }
+  }
+
+  fn ooo_error(&self) -> Option<Error> {
+    let ooo_key = OutOfOrderKey::try_from_keys(&self.keys())?;
+    let key = &ooo_key.key;
+    let should_before_key = &ooo_key.should_before_key;
+    let error = Error::new(
+      key.span,
+      format!("{} should sort before {}", key, should_before_key),
+    );
+    Some(error)
   }
 }
 
@@ -153,16 +159,6 @@ impl ToTokens for SortedInput {
       SortedInput::Enum(item_enum) => item_enum.to_tokens(tokens),
       SortedInput::Match(expr_match) => expr_match.to_tokens(tokens),
     }
-    let ooo_key = OutOfOrderKey::try_from_keys(&self.keys());
-    if let Some(ooo_key) = ooo_key {
-      let key = &ooo_key.key;
-      let should_before_key = &ooo_key.should_before_key;
-      let error = Error::new(
-        key.span,
-        format!("{} should sort before {}", key, should_before_key),
-      );
-      tokens.extend(error.to_compile_error());
-    }
   }
 }
 
@@ -172,5 +168,64 @@ pub fn sorted(
   input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
   let input = parse_macro_input!(input as SortedInput);
-  input.into_token_stream().into()
+  if let Some(error) = input.ooo_error() {
+    let error = error.to_compile_error();
+    quote! {
+      #input
+      #error
+    }
+    .into()
+  } else {
+    input.into_token_stream().into()
+  }
+}
+
+#[proc_macro_attribute]
+pub fn check(
+  _args: proc_macro::TokenStream,
+  input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+  let mut input = parse_macro_input!(input as syn::ItemFn);
+  let mut visitor = CheckVisitor::default();
+  visitor.visit_item_fn_mut(&mut input);
+
+  if let Some(error) = visitor.error {
+    let error = error.to_compile_error();
+    quote! {
+      #input
+      #error
+    }
+    .into()
+  } else {
+    input.into_token_stream().into()
+  }
+}
+
+#[derive(Default)]
+struct CheckVisitor {
+  error: Option<Error>,
+}
+
+impl VisitMut for CheckVisitor {
+  fn visit_expr_match_mut(&mut self, expr_match: &mut syn::ExprMatch) {
+    let sorted_index = expr_match
+      .attrs
+      .iter()
+      .position(|a| a.meta.path().is_ident("sorted"));
+
+    let Some(idx) = sorted_index else {
+      return syn::visit_mut::visit_expr_match_mut(self, expr_match);
+    };
+    // could be used to signal site for parse error
+    let _attr = expr_match.attrs.remove(idx);
+
+    let input: SortedInput = syn::parse_quote! { #expr_match };
+    if let Some(error) = input.ooo_error() {
+      self.error = Some(error);
+    }
+
+    // in case there are #[sorted] tagged match expressions nested
+    // within this match expression.
+    syn::visit_mut::visit_expr_match_mut(self, expr_match);
+  }
 }
