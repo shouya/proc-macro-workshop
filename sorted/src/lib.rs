@@ -86,8 +86,8 @@ enum SortedInput {
 }
 
 impl SortedInput {
-  fn keys(&self) -> Vec<Key> {
-    match self {
+  fn keys(&self) -> syn::Result<Vec<Key>> {
+    let keys = match self {
       SortedInput::Enum(item_enum) => item_enum
         .variants
         .iter()
@@ -97,14 +97,24 @@ impl SortedInput {
       SortedInput::Match(expr_match) => expr_match
         .arms
         .iter()
-        .flat_map(|a| pat_to_names(&a.pat))
+        .map(|a| pat_to_names(&a.pat))
+        .collect::<syn::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .map(Key::from)
         .collect(),
-    }
+    };
+
+    Ok(keys)
   }
 
-  fn ooo_error(&self) -> Option<Error> {
-    let ooo_key = OutOfOrderKey::try_from_keys(&self.keys())?;
+  fn error(&self) -> Option<Error> {
+    let keys = match self.keys() {
+      Ok(keys) => keys,
+      Err(e) => return Some(e),
+    };
+
+    let ooo_key = OutOfOrderKey::try_from_keys(&keys)?;
     let key = &ooo_key.key;
     let should_before_key = &ooo_key.should_before_key;
     let error = Error::new(
@@ -115,14 +125,22 @@ impl SortedInput {
   }
 }
 
-fn pat_to_names(pat: &Pat) -> Vec<&syn::Path> {
+fn pat_to_names(pat: &Pat) -> syn::Result<Vec<&syn::Path>> {
   match pat {
     Pat::Paren(p) => pat_to_names(&p.pat),
-    Pat::Path(p) => vec![&p.path],
-    Pat::Struct(p) => vec![&p.path],
-    Pat::TupleStruct(p) => vec![&p.path],
-    Pat::Or(p) => p.cases.iter().flat_map(pat_to_names).collect(),
-    _ => vec![],
+    Pat::Path(p) => Ok(vec![&p.path]),
+    Pat::Struct(p) => Ok(vec![&p.path]),
+    Pat::TupleStruct(p) => Ok(vec![&p.path]),
+    Pat::Or(p) => Ok(
+      p.cases
+        .iter()
+        .map(pat_to_names)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
+    ),
+    _ => Err(Error::new(pat.span(), "unsupported by #[sorted]")),
   }
 }
 
@@ -168,7 +186,7 @@ pub fn sorted(
   input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
   let input = parse_macro_input!(input as SortedInput);
-  if let Some(error) = input.ooo_error() {
+  if let Some(error) = input.error() {
     let error = error.to_compile_error();
     quote! {
       #input
@@ -220,7 +238,7 @@ impl VisitMut for CheckVisitor {
     let _attr = expr_match.attrs.remove(idx);
 
     let input: SortedInput = syn::parse_quote! { #expr_match };
-    if let Some(error) = input.ooo_error() {
+    if let Some(error) = input.error() {
       self.error = Some(error);
     }
 

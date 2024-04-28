@@ -6,22 +6,14 @@
 // To run the code:
 //     $ cargo run
 
-use std::fmt::{self, Display};
-use std::io;
-
-pub enum Error {
-  Fmt(fmt::Error),
-  Io(io::Error),
-}
-
-impl Display for Error {
-  #[sorted::check]
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    #[sorted]
-    match self {
-      Error::Io(e) => write!(f, "{}", e),
-      Error::Fmt(e) => write!(f, "{}", e),
-    }
+#[sorted::check]
+fn f(bytes: &[u8]) -> Option<u8> {
+  #[sorted]
+  match bytes {
+    [] => Some(0),
+    [a] => Some(*a),
+    [a, b] => Some(a + b),
+    _other => None,
   }
 }
 
