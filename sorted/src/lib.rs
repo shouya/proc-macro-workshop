@@ -4,13 +4,21 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{
   parse::Parse, parse_macro_input, spanned::Spanned, visit_mut::VisitMut,
-  Error, Ident, Pat, Path,
+  Error, Ident, Pat, PatWild, Path, Token,
 };
+
+#[derive(Debug, Clone)]
+enum KeyData {
+  Path(Path),
+  Ident(Ident),
+  Underscore(Token![_]),
+}
 
 #[derive(Debug, Clone)]
 struct Key {
   name: String,
-  span: Span,
+  data: KeyData,
+  is_underscore: bool,
 }
 
 impl Display for Key {
@@ -27,7 +35,7 @@ impl PartialOrd for Key {
 
 impl Ord for Key {
   fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-    self.name.cmp(&other.name)
+    (self.is_underscore, &self.name).cmp(&(other.is_underscore, &other.name))
   }
 }
 
@@ -41,18 +49,46 @@ impl Eq for Key {}
 
 impl From<&Ident> for Key {
   fn from(ident: &Ident) -> Self {
+    let name = ident.to_string();
+    let is_underscore = name.starts_with('_');
+    let name = name.trim_start_matches('_');
     Self {
-      name: ident.to_string(),
-      span: ident.span(),
+      name: name.to_string(),
+      data: KeyData::Ident(ident.clone()),
+      is_underscore,
     }
   }
 }
 
 impl From<&Path> for Key {
   fn from(path: &Path) -> Self {
+    let name = path_to_string(path);
     Self {
-      name: path_to_string(path),
-      span: path.span(),
+      name,
+      data: KeyData::Path(path.clone()),
+      is_underscore: false,
+    }
+  }
+}
+
+impl From<&PatWild> for Key {
+  fn from(underscore: &PatWild) -> Self {
+    Self {
+      name: "".to_string(),
+      data: KeyData::Underscore(underscore.underscore_token.clone()),
+      is_underscore: true,
+    }
+  }
+}
+
+impl Key {
+  fn error(&self, message: &str) -> syn::Error {
+    match &self.data {
+      KeyData::Ident(ident) => Error::new_spanned(ident, message),
+      KeyData::Path(path) => Error::new_spanned(path, message),
+      KeyData::Underscore(underscore) => {
+        Error::new_spanned(underscore, message)
+      }
     }
   }
 }
@@ -101,7 +137,6 @@ impl SortedInput {
         .collect::<syn::Result<Vec<_>>>()?
         .into_iter()
         .flatten()
-        .map(Key::from)
         .collect(),
     };
 
@@ -117,30 +152,32 @@ impl SortedInput {
     let ooo_key = OutOfOrderKey::try_from_keys(&keys)?;
     let key = &ooo_key.key;
     let should_before_key = &ooo_key.should_before_key;
-    let error = Error::new(
-      key.span,
-      format!("{} should sort before {}", key, should_before_key),
-    );
-    Some(error)
+    let message = format!("{} should sort before {}", key, should_before_key);
+    Some(key.error(&message))
   }
 }
 
-fn pat_to_names(pat: &Pat) -> syn::Result<Vec<&syn::Path>> {
+fn pat_to_names(pat: &Pat) -> syn::Result<Vec<Key>> {
   match pat {
+    Pat::Ident(i) => Ok(vec![Key::from(&i.ident)]),
     Pat::Paren(p) => pat_to_names(&p.pat),
-    Pat::Path(p) => Ok(vec![&p.path]),
-    Pat::Struct(p) => Ok(vec![&p.path]),
-    Pat::TupleStruct(p) => Ok(vec![&p.path]),
+    Pat::Path(p) => Ok(vec![Key::from(&p.path)]),
+    Pat::Struct(p) => Ok(vec![Key::from(&p.path)]),
+    Pat::TupleStruct(p) => Ok(vec![Key::from(&p.path)]),
+    Pat::Wild(p) => Ok(vec![Key::from(p)]),
     Pat::Or(p) => Ok(
       p.cases
         .iter()
         .map(pat_to_names)
-        .collect::<Result<Vec<_>, _>>()?
+        .collect::<syn::Result<Vec<_>>>()?
         .into_iter()
         .flatten()
         .collect::<Vec<_>>(),
     ),
-    _ => Err(Error::new(pat.span(), "unsupported by #[sorted]")),
+    _ => {
+      dbg!(&pat);
+      Err(Error::new(pat.span(), "unsupported by #[sorted]"))
+    }
   }
 }
 
