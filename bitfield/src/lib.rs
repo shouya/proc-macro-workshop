@@ -19,11 +19,10 @@ pub trait Specifier {
 define_bitfield_types!(0..64);
 
 mod checks {
-
   trait TotalSizeIsMultipleOfEightBits {}
   impl TotalSizeIsMultipleOfEightBits for ZeroMod8 {}
 
-  trait CyclicAdd<A, B> {
+  trait CyclicAdd<A> {
     type O;
   }
 
@@ -36,8 +35,5 @@ mod checks {
   struct SixMod8;
   struct SevenMod8;
 
-  define_add_impl_for!(
-    ZeroMod8, OneMod8, TwoMod8, ThreeMod8, FourMod8, FiveMod8, SixMod8,
-    SevenMod8
-  );
+  bitfield_impl::define_cyclic_add!();
 }

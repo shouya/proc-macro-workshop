@@ -55,13 +55,14 @@
 use bitfield::*;
 
 //#[bitfield]
+#[allow(unused)]
 pub struct MyFourBytes {
-    a: B1,
-    b: B3,
-    c: B4,
-    d: B24,
+  a: B1,
+  b: B3,
+  c: B4,
+  d: B24,
 }
 
 fn main() {
-    assert_eq!(<B24 as Specifier>::BITS, 24);
+  assert_eq!(<B24 as Specifier>::BITS, 24);
 }
