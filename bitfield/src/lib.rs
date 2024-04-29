@@ -10,6 +10,34 @@
 //
 // From the perspective of a user of this crate, they get all the necessary APIs
 // (macro, trait, struct) through the one bitfield crate.
-pub use bitfield_impl::bitfield;
+pub use bitfield_impl::{bitfield, define_bitfield_types};
 
-// TODO other things
+pub trait Specifier {
+  const BITS: usize;
+}
+
+define_bitfield_types!(0..64);
+
+mod checks {
+
+  trait TotalSizeIsMultipleOfEightBits {}
+  impl TotalSizeIsMultipleOfEightBits for ZeroMod8 {}
+
+  trait CyclicAdd<A, B> {
+    type O;
+  }
+
+  struct ZeroMod8;
+  struct OneMod8;
+  struct TwoMod8;
+  struct ThreeMod8;
+  struct FourMod8;
+  struct FiveMod8;
+  struct SixMod8;
+  struct SevenMod8;
+
+  define_add_impl_for!(
+    ZeroMod8, OneMod8, TwoMod8, ThreeMod8, FourMod8, FiveMod8, SixMod8,
+    SevenMod8
+  );
+}
