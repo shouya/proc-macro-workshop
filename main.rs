@@ -17,5 +17,18 @@ pub struct MyFourBytes {
 }
 
 fn main() {
-  assert_eq!(std::mem::size_of::<MyFourBytes>(), 4);
+  let mut bitfield = MyFourBytes::new();
+  assert_eq!(0, bitfield.get_a());
+  assert_eq!(0, bitfield.get_b());
+  assert_eq!(0, bitfield.get_c());
+  assert_eq!(0, bitfield.get_d());
+
+  bitfield.debug();
+
+  bitfield.set_c(14);
+  bitfield.debug();
+  assert_eq!(0, bitfield.get_a());
+  assert_eq!(0, bitfield.get_b());
+  assert_eq!(14, bitfield.get_c());
+  assert_eq!(0, bitfield.get_d());
 }

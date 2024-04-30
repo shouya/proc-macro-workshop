@@ -38,43 +38,30 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
       // TODO: change u64 to #ty::Repr
       let accessor_impl = quote! {
         fn #get_field(&self) -> u64 {
-          // they all should really be constexpr
-          let offset_start = { (#acc_offset) / 8 };
-          let offset_end = { offset_start + ({ <#ty as Specifier>::BITS } / 8)};
-          let shift_end = { offset_end % 8 };
+          let start_bit = { #acc_offset };
+          let len = { <#ty as Specifier>::BITS };
 
-          let mut acc = 0u128;
-
-          for b in (self.data[offset_start..=offset_end]).iter().rev() {
-            acc <<= 8;
-            acc |= *b as u128;
+          let mut acc: u64 = 0;
+          for i in 0..len {
+            let n = start_bit + i;
+            if self.get_bit(n) {
+              acc |= 1 << i;
+            }
           }
 
-          ((acc >> shift_end) & 0xffff_ffff_ffff_ffff) as u64
+          acc
         }
 
         fn #set_field(&mut self, value: u64) {
-          let offset_start = { (#acc_offset) / 8 };
-          let offset_end = { offset_start + ({ <#ty as Specifier>::BITS } / 8)};
-          let shift_start = { offset_start % 8 };
-          let shift_end = { offset_end % 8 };
-          let starting_byte_mask = 0xff >> shift_start;
-          let ending_byte_mask = 0xff << shift_end;
+          assert!(value < (1 << <#ty as Specifier>::BITS));
 
-          let value = value as u128;
-          for i in (offset_start..=offset_end).into_iter() {
-            let mask = if i == offset_start {
-              starting_byte_mask
-            } else if i == offset_end {
-              ending_byte_mask
-            } else {
-              0xff
-            };
+          let start_bit = { #acc_offset };
+          let len = { <#ty as Specifier>::BITS };
 
-            let value_b = (value >> (8 * (offset_end - i)) & 0xff) as u8;
-            let source_b = self.data[i];
-
-            self.data[i] = (source_b & !mask) | (value_b & mask);
+          for i in 0..len {
+            let n = start_bit + i;
+            let bit = value & (1 << i) != 0;
+            self.set_bit(n, bit);
           }
         }
       };
@@ -93,6 +80,28 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
     impl #struct_name {
       fn new() -> Self {
         Self { data: Default::default() }
+      }
+
+      fn get_bit(&self, n: usize) -> bool {
+        self.data[n / 8] & (1 << (n % 8)) != 0
+      }
+
+      fn set_bit(&mut self, n: usize, value: bool) {
+        if value {
+          self.data[n / 8] |= 1 << (n % 8);
+        } else {
+          self.data[n / 8] &= !(1 << (n % 8));
+        }
+      }
+
+      fn debug(&self) {
+        for b in &self.data {
+          let bits_msb_left = format!("{:08b}", b);
+          let bits_lsb_left = bits_msb_left.chars().rev().collect::<String>();
+
+          print!("{} ", bits_lsb_left);
+        }
+        println!();
       }
 
       #( #impl_fields )*
