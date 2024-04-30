@@ -8,10 +8,12 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
   let struct_name = &input.ident;
 
   let mut total_bits = vec![];
+  let mut alignment = quote! { ::bitfield::checks::ZeroMod8 };
 
   for field in &input.fields {
     let ty = &field.ty;
     total_bits.push(quote! { <#ty as Specifier>::BITS });
+    alignment = quote! { <#alignment as ::bitfield::checks::CyclicAdd<<#ty as Specifier>::Alignment>>::O };
   }
 
   let new_body = quote! {
@@ -21,8 +23,11 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
   };
 
   let impl_specifier = quote! {
-    impl Specifier for #struct_name {
+    impl Specifier for #struct_name
+    where #alignment: ::bitfield::checks::TotalSizeIsMultipleOfEightBits
+    {
       const BITS: usize = { #(#total_bits)+* };
+      type Alignment = #alignment;
     }
   };
 
@@ -139,10 +144,12 @@ pub fn define_bitfield_types(input: TokenStream) -> TokenStream {
 
   for i in start..end {
     let ident = format_ident!("B{}", i);
+    let alignment = format_ident!("{}Mod8", num_name(i % 8));
     defns.push(quote! {
       pub enum #ident {}
       impl Specifier for #ident {
         const BITS: usize = #i;
+        type Alignment = checks::#alignment;
       }
     });
   }

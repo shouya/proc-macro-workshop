@@ -14,26 +14,27 @@ pub use bitfield_impl::{bitfield, define_bitfield_types};
 
 pub trait Specifier {
   const BITS: usize;
+  type Alignment;
 }
 
 define_bitfield_types!(0..64);
 
-mod checks {
-  trait TotalSizeIsMultipleOfEightBits {}
+pub mod checks {
+  pub trait TotalSizeIsMultipleOfEightBits {}
   impl TotalSizeIsMultipleOfEightBits for ZeroMod8 {}
 
-  trait CyclicAdd<A> {
+  pub trait CyclicAdd<A> {
     type O;
   }
 
-  struct ZeroMod8;
-  struct OneMod8;
-  struct TwoMod8;
-  struct ThreeMod8;
-  struct FourMod8;
-  struct FiveMod8;
-  struct SixMod8;
-  struct SevenMod8;
+  pub struct ZeroMod8;
+  pub struct OneMod8;
+  pub struct TwoMod8;
+  pub struct ThreeMod8;
+  pub struct FourMod8;
+  pub struct FiveMod8;
+  pub struct SixMod8;
+  pub struct SevenMod8;
 
   bitfield_impl::define_cyclic_add!();
 }
