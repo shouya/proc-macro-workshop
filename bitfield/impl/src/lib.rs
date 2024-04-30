@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, parse_quote, ItemStruct, LitInt};
+use syn::{parse_macro_input, ItemStruct};
 
 #[proc_macro_attribute]
 pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -24,10 +24,11 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
 
   let impl_specifier = quote! {
     impl Specifier for #struct_name
-    where #alignment: ::bitfield::checks::TotalSizeIsMultipleOfEightBits
+    where #alignment: ::bitfield::TotalSizeIsMultipleOfEightBits
     {
       const BITS: usize = { #(#total_bits)+* };
       type Alignment = #alignment;
+      type Repr = [u8; {{ Self::BITS.div_ceil(8) }}];
     }
   };
 
@@ -40,32 +41,23 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
       let get_field = format_ident!("get_{}", field.ident.as_ref().unwrap());
       let set_field = format_ident!("set_{}", field.ident.as_ref().unwrap());
 
-      // TODO: change u64 to #ty::Repr
       let accessor_impl = quote! {
-        fn #get_field(&self) -> u64 {
+        fn #get_field(&self) -> <#ty as Specifier>::Repr {
           let start_bit = { #acc_offset };
           let len = { <#ty as Specifier>::BITS };
 
-          let mut acc: u64 = 0;
-          for i in 0..len {
-            let n = start_bit + i;
-            if self.get_bit(n) {
-              acc |= 1 << i;
-            }
-          }
-
-          acc
+          let iter = (start_bit..(start_bit+len)).map(|i| self.get_bit(i));
+          <#ty as Specifier>::Repr::from_bits(iter)
         }
 
-        fn #set_field(&mut self, value: u64) {
+        fn #set_field(&mut self, value: <#ty as Specifier>::Repr) {
           assert!(value < (1 << <#ty as Specifier>::BITS));
 
           let start_bit = { #acc_offset };
           let len = { <#ty as Specifier>::BITS };
 
-          for i in 0..len {
+          for (i, bit) in (0..len).zip(value.to_bits()) {
             let n = start_bit + i;
-            let bit = value & (1 << i) != 0;
             self.set_bit(n, bit);
           }
         }
@@ -116,40 +108,28 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
-pub fn define_bitfield_types(input: TokenStream) -> TokenStream {
-  let syn::ExprRange {
-    limits, start, end, ..
-  } = parse_macro_input!(input);
-  if !matches!(limits, syn::RangeLimits::HalfOpen(_)) {
-    return syn::Error::new_spanned(limits, "expected half-open range (..)")
-      .to_compile_error()
-      .into();
-  }
-
-  let start: LitInt = parse_quote! { #start };
-  let end: LitInt = parse_quote! { #end };
-
-  let Ok(start) = start.base10_parse::<usize>() else {
-    return syn::Error::new_spanned(start, "expected integer literal")
-      .to_compile_error()
-      .into();
-  };
-  let Ok(end) = end.base10_parse::<usize>() else {
-    return syn::Error::new_spanned(end, "expected integer literal")
-      .to_compile_error()
-      .into();
-  };
-
+pub fn define_bitfield_types(_input: TokenStream) -> TokenStream {
   let mut defns = vec![];
 
-  for i in start..end {
+  for i in 1..=64 {
     let ident = format_ident!("B{}", i);
     let alignment = format_ident!("{}Mod8", num_name(i % 8));
+    let repr = if i <= 8 {
+      quote!(u8)
+    } else if i <= 16 {
+      quote!(u16)
+    } else if i <= 32 {
+      quote!(u32)
+    } else {
+      quote!(u64)
+    };
+
     defns.push(quote! {
       pub enum #ident {}
       impl Specifier for #ident {
         const BITS: usize = #i;
         type Alignment = checks::#alignment;
+        type Repr = #repr;
       }
     });
   }
