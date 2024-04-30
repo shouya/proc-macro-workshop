@@ -28,7 +28,7 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
     {
       const BITS: usize = { #(#total_bits)+* };
       type Alignment = #alignment;
-      type Repr = [u8; {{ Self::BITS.div_ceil(8) }}];
+      type Repr = [u8; {{ { #(#total_bits)+* }.div_ceil(8) }}];
     }
   };
 
