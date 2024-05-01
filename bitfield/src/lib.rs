@@ -56,11 +56,12 @@ define_bitfield_types!();
 // impl Specifier for u8, etc
 impl_specifier_for_primitive_types!();
 
-pub trait TotalSizeIsMultipleOfEightBits: checks::Sealed {}
-impl TotalSizeIsMultipleOfEightBits for checks::ZeroMod8 {}
-
 pub mod checks {
-  pub trait Sealed {}
+  mod private {
+    pub trait Sealed {}
+  }
+
+  use private::Sealed;
 
   // check for field alignment
   impl Sealed for ZeroMod8 {}
@@ -79,6 +80,9 @@ pub mod checks {
   pub enum SevenMod8 {}
 
   bitfield_impl::define_cyclic_add!();
+
+  pub trait TotalSizeIsMultipleOfEightBits: Sealed {}
+  impl TotalSizeIsMultipleOfEightBits for ZeroMod8 {}
 
   // check for enum discriminant range
   pub enum False {}

@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::{parse_macro_input, DataEnum, DeriveInput, ItemStruct};
 
 #[proc_macro_attribute]
@@ -9,12 +9,17 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
   let struct_name = &input.ident;
 
   let mut total_bits = vec![];
-  let mut alignment = quote! { ::bitfield::checks::ZeroMod8 };
+  let mut alignment = quote_spanned! {
+    Span::mixed_site() => ::bitfield::checks::ZeroMod8
+  };
 
   for field in &input.fields {
     let ty = &field.ty;
     total_bits.push(quote! { <#ty as Specifier>::BITS });
-    alignment = quote! { <#alignment as ::bitfield::checks::CyclicAdd<<#ty as Specifier>::Alignment>>::O };
+    alignment = quote_spanned! {
+      Span::mixed_site() =>
+        <#alignment as ::bitfield::checks::CyclicAdd<<#ty as Specifier>::Alignment>>::O
+    };
   }
 
   let new_body = quote! {
@@ -23,9 +28,9 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
     }
   };
 
-  let impl_specifier = quote! {
+  let impl_specifier = quote_spanned! { Span::mixed_site() =>
     impl Specifier for #struct_name
-    where #alignment: ::bitfield::TotalSizeIsMultipleOfEightBits
+    where #alignment: ::bitfield::checks::TotalSizeIsMultipleOfEightBits
     {
       const BITS: usize = { #(#total_bits)+* };
       type Alignment = #alignment;
