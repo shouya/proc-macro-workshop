@@ -107,4 +107,8 @@ pub mod checks {
   impl ArrayLenEqOne for [(); 0] {
     type Val = False;
   }
+
+  // check for #[bit=N] attribute matching the number of BITS
+  pub trait BitAttributeMatchesBits: Sealed {}
+  impl BitAttributeMatchesBits for True {}
 }

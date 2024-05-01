@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{format_ident, quote, quote_spanned};
+use quote::{format_ident, quote};
 use syn::{parse_macro_input, DataEnum, DeriveInput, ItemStruct};
 
 #[proc_macro_attribute]
@@ -9,17 +9,25 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
   let struct_name = &input.ident;
 
   let mut total_bits = vec![];
-  let mut alignment = quote_spanned! {
-    Span::mixed_site() => ::bitfield::checks::ZeroMod8
-  };
+  let mut alignment = quote!(::bitfield::checks::ZeroMod8);
+  let mut bits_checkers = vec![];
 
   for field in &input.fields {
     let ty = &field.ty;
     total_bits.push(quote! { <#ty as Specifier>::BITS });
-    alignment = quote_spanned! {
-      Span::mixed_site() =>
+    alignment = quote! {
         <#alignment as ::bitfield::checks::CyclicAdd<<#ty as Specifier>::Alignment>>::O
     };
+
+    // TODO: convert this unwrap into compile error
+    if let Some(int) = get_attr_lit(&field.attrs, "bits").unwrap() {
+      let arr =
+        quote!([(); (<#ty as Specifier>::BITS == (#int as usize)) as usize]);
+      bits_checkers.push(quote! {
+        <#arr as ::bitfield::checks::ArrayLenEqOne>::Val
+          : ::bitfield::checks::BitAttributeMatchesBits
+      });
+    }
   }
 
   let new_body = quote! {
@@ -28,9 +36,14 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
     }
   };
 
-  let impl_specifier = quote_spanned! { Span::mixed_site() =>
+  let mut checks = bits_checkers;
+  checks.push(quote! {
+    #alignment : ::bitfield::checks::TotalSizeIsMultipleOfEightBits
+  });
+
+  let impl_specifier = quote! {
     impl Specifier for #struct_name
-    where #alignment: ::bitfield::checks::TotalSizeIsMultipleOfEightBits
+    where #( #checks ),*
     {
       const BITS: usize = { #(#total_bits)+* };
       type Alignment = #alignment;
@@ -334,4 +347,29 @@ fn num_name(n: usize) -> &'static str {
     7 => "Seven",
     _ => unreachable!(),
   }
+}
+
+fn get_attr_lit(
+  attrs: &[syn::Attribute],
+  name: &str,
+) -> syn::Result<Option<syn::Lit>> {
+  for attr in attrs {
+    if let syn::Meta::NameValue(syn::MetaNameValue { path, value, .. }) =
+      &attr.meta
+    {
+      if !path.is_ident(name) {
+        continue;
+      }
+
+      let syn::Expr::Lit(syn::ExprLit { lit, .. }) = value else {
+        return Err(syn::Error::new_spanned(
+          value,
+          format!("expected literal value for attribute {}", name),
+        ));
+      };
+      return Ok(Some(lit.clone()));
+    }
+  }
+
+  Ok(None)
 }
