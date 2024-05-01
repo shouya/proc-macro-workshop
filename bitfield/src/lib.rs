@@ -62,6 +62,7 @@ impl TotalSizeIsMultipleOfEightBits for checks::ZeroMod8 {}
 pub mod checks {
   pub trait Sealed {}
 
+  // check for field alignment
   impl Sealed for ZeroMod8 {}
 
   pub trait CyclicAdd<A> {
@@ -78,4 +79,28 @@ pub mod checks {
   pub enum SevenMod8 {}
 
   bitfield_impl::define_cyclic_add!();
+
+  // check for enum discriminant range
+  pub enum False {}
+  pub enum True {}
+
+  impl Sealed for False {}
+  impl Sealed for True {}
+
+  pub trait DiscriminantInRange: Sealed {}
+  impl DiscriminantInRange for True {}
+
+  pub trait ArrayLenEqOne: Sealed {
+    type Val;
+  }
+
+  impl Sealed for [(); 1] {}
+  impl ArrayLenEqOne for [(); 1] {
+    type Val = True;
+  }
+
+  impl Sealed for [(); 0] {}
+  impl ArrayLenEqOne for [(); 0] {
+    type Val = False;
+  }
 }

@@ -259,6 +259,7 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
   }
 
   let bits = variants.len().trailing_zeros() as usize;
+  let max_value: usize = 1 << bits;
   let repr = if bits <= 8 {
     quote!(u8)
   } else if bits <= 16 {
@@ -270,6 +271,7 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
   };
   let alignment = format_ident!("{}Mod8", num_name(bits % 8));
   let mut from_val = vec![];
+  let mut discriminant_checks = vec![];
 
   for variant in variants {
     let variant_ident = &variant.ident;
@@ -279,10 +281,19 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
         return #ident::#variant_ident;
       }
     });
+
+    let arr =
+      quote!([(); ((#ident::#variant_ident as usize) < #max_value) as usize]);
+    discriminant_checks.push(quote! {
+      <#arr as ::bitfield::checks::ArrayLenEqOne>::Val :
+      ::bitfield::checks::DiscriminantInRange
+    });
   }
 
   quote! {
-    impl Specifier for #ident {
+    impl Specifier for #ident where
+      #( #discriminant_checks ),*
+    {
       const BITS: usize = #bits;
       type Alignment = checks::#alignment;
       type Repr = #ident;
@@ -303,8 +314,7 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
       }
 
     }
-  }
-  .into()
+  }.into()
 }
 
 fn num_name(n: usize) -> &'static str {
