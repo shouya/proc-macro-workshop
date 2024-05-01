@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::{parse_macro_input, DataEnum, DeriveInput, ItemStruct};
 
 #[proc_macro_attribute]
@@ -21,11 +21,10 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
 
     // TODO: convert this unwrap into compile error
     if let Some(int) = get_attr_lit(&field.attrs, "bits").unwrap() {
-      let arr =
-        quote!([(); (<#ty as Specifier>::BITS == (#int as usize)) as usize]);
-      bits_checkers.push(quote! {
-        <#arr as ::bitfield::checks::ArrayLenEqOne>::Val
-          : ::bitfield::checks::BitAttributeMatchesBits
+      let arr1 = quote!([(); <#ty as Specifier>::BITS]);
+      let arr2 = quote!([(); #int as usize]);
+      bits_checkers.push(quote_spanned! { int.span() =>
+        #arr1 : ::bitfield::checks::TypeEq<#arr2>
       });
     }
   }

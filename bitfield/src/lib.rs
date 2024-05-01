@@ -109,6 +109,7 @@ pub mod checks {
   }
 
   // check for #[bit=N] attribute matching the number of BITS
-  pub trait BitAttributeMatchesBits: Sealed {}
-  impl BitAttributeMatchesBits for True {}
+  pub trait TypeEq<T> {}
+
+  impl<T> TypeEq<T> for T {}
 }
