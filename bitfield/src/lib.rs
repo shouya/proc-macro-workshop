@@ -13,7 +13,9 @@
 pub use bitfield_impl::bitfield;
 pub use bitfield_impl::BitfieldSpecifier;
 
-use bitfield_impl::define_bitfield_types;
+use bitfield_impl::{
+  define_bitfield_types, impl_specifier_for_primitive_types,
+};
 
 pub trait Specifier {
   const BITS: usize;
@@ -48,7 +50,11 @@ impl Specifier for bool {
   }
 }
 
+// define B1, B2, ..., B64
 define_bitfield_types!();
+
+// impl Specifier for u8, etc
+impl_specifier_for_primitive_types!();
 
 pub trait TotalSizeIsMultipleOfEightBits: checks::Sealed {}
 impl TotalSizeIsMultipleOfEightBits for checks::ZeroMod8 {}

@@ -185,6 +185,44 @@ pub fn define_bitfield_types(_input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
+pub fn impl_specifier_for_primitive_types(_: TokenStream) -> TokenStream {
+  let mut defns = vec![];
+  for (ty, bits) in [("u8", 8usize), ("u16", 16), ("u32", 32), ("u64", 64)] {
+    let ident = format_ident!("{}", ty);
+
+    let from_bits = (0..bits).map(|j| quote! {if bits[#j] {value |= 1 << #j;}});
+    let to_bits = (0..bits).map(|j| quote! {(repr & (1 << #j)) != 0});
+
+    let defn = quote! {
+      impl Specifier for #ident {
+        const BITS: usize = #bits;
+
+        // primitive number types are always aligned to 8 bits
+        type Alignment = checks::ZeroMod8;
+        type Repr = #ident;
+
+        fn from_bits(bits: &[bool]) -> Self::Repr {
+          let mut value: Self::Repr = 0;
+          #( #from_bits )*
+          value
+        }
+
+        fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
+          Box::new([ #( #to_bits ),* ])
+        }
+      }
+    };
+
+    defns.push(defn);
+  }
+
+  quote! {
+    #(#defns)*
+  }
+  .into()
+}
+
+#[proc_macro]
 pub fn define_cyclic_add(_: TokenStream) -> TokenStream {
   let mut defns = vec![];
 
