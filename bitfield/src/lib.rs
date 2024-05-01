@@ -24,78 +24,31 @@ pub trait Specifier {
 
   // The narrowest integer type that can hold the number of bits, or
   // [u8; N]
-  type Repr: BitfieldRepr;
-}
+  type Repr;
 
-define_bitfield_types!();
+  // slice/array length: Self::BITS
+  // note: type parameters may not be used in const expressions
+
+  // from LSB to MSB
+  fn from_bits(bits: &[bool]) -> Self::Repr;
+  fn to_bits(repr: &Self::Repr) -> Box<[bool]>;
+}
 
 impl Specifier for bool {
   const BITS: usize = 1;
   type Alignment = checks::OneMod8;
   type Repr = bool;
-}
 
-pub trait BitfieldRepr {
-  // from LSB to MSB
-  fn from_bits<I: std::iter::Iterator<Item = bool>>(bits: I) -> Self;
-
-  // from LSB to MSB
-  fn to_bits(&self) -> impl Iterator<Item = bool> + '_;
-}
-
-macro_rules! define_bitfield_repr {
-  ($t:ty, $b:literal) => {
-    impl BitfieldRepr for $t {
-      fn from_bits<I: std::iter::Iterator<Item = bool>>(bits: I) -> Self {
-        bits
-          .enumerate()
-          .fold(0, |acc, (i, b)| acc | ((b as $t) << i))
-      }
-
-      fn to_bits(&self) -> impl Iterator<Item = bool> + '_ {
-        let mut n = *self;
-        (0..$b).into_iter().map(move |_| {
-          let bit = n & 1;
-          n >>= 1;
-          bit != 0
-        })
-      }
-    }
-  };
-}
-
-impl BitfieldRepr for bool {
-  fn from_bits<I: std::iter::Iterator<Item = bool>>(mut bits: I) -> Self {
-    bits.next().unwrap_or(false)
+  fn from_bits(bits: &[bool]) -> Self::Repr {
+    bits[0]
   }
 
-  fn to_bits(&self) -> impl Iterator<Item = bool> + '_ {
-    std::iter::once(*self)
+  fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
+    Box::new([*repr])
   }
 }
 
-define_bitfield_repr!(u8, 8);
-define_bitfield_repr!(u16, 16);
-define_bitfield_repr!(u32, 32);
-define_bitfield_repr!(u64, 64);
-
-impl<const N: usize> BitfieldRepr for [u8; N] {
-  fn from_bits<I: std::iter::Iterator<Item = bool>>(bits: I) -> Self {
-    let mut acc = [0; N];
-    for (i, b) in bits.enumerate() {
-      let byte = &mut acc[i / 8];
-      if b {
-        *byte |= 1 << (i % 8);
-      }
-    }
-    acc
-  }
-
-  fn to_bits(&self) -> impl Iterator<Item = bool> + '_ {
-    (0..N)
-      .flat_map(move |i| (0..8).map(move |j| (self[i] & (1 << (8 - j))) != 0))
-  }
-}
+define_bitfield_types!();
 
 pub trait TotalSizeIsMultipleOfEightBits: checks::Sealed {}
 impl TotalSizeIsMultipleOfEightBits for checks::ZeroMod8 {}

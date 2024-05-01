@@ -28,7 +28,27 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
     {
       const BITS: usize = { #(#total_bits)+* };
       type Alignment = #alignment;
-      type Repr = [u8; {{ { #(#total_bits)+* }.div_ceil(8) }}];
+      type Repr = #struct_name;
+
+      fn from_bits(bits: &[bool]) -> Self::Repr {
+        let mut data = [0; {{ Self::BITS }.div_ceil(8) }];
+        for (i, &bit) in bits.iter().enumerate() {
+          if bit {
+            data[i / 8] |= 1 << (i % 8);
+          }
+        }
+        Self { data }
+      }
+
+      fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
+        let mut bits = Vec::with_capacity(Self::BITS);
+        for &byte in &repr.data {
+          for i in 0..8 {
+            bits.push((byte & (1 << i)) != 0);
+          }
+        }
+        bits.into_boxed_slice()
+      }
     }
   };
 
@@ -45,9 +65,8 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
         fn #get_field(&self) -> <#ty as Specifier>::Repr {
           let start_bit = { #acc_offset };
           let len = { <#ty as Specifier>::BITS };
-
-          let iter = (start_bit..(start_bit+len)).map(|i| self.get_bit(i));
-          <#ty as Specifier>::Repr::from_bits(iter)
+          let bits = (0..len).map(|i| self.get_bit(start_bit + i)).collect::<Vec<_>>();
+          <#ty as Specifier>::from_bits(&bits)
         }
 
         fn #set_field(&mut self, value: <#ty as Specifier>::Repr) {
@@ -56,10 +75,10 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
 
           let start_bit = { #acc_offset };
           let len = { <#ty as Specifier>::BITS };
-
-          for (i, bit) in (0..len).zip(value.to_bits()) {
-            let n = start_bit + i;
-            self.set_bit(n, bit);
+          let bits = <#ty as Specifier>::to_bits(&value);
+          // take(..) is needed because #ty's Repr may be longer than the actual bit width
+          for (i, &bit) in bits.iter().take(len).enumerate() {
+            self.set_bit(start_bit + i, bit);
           }
         }
       };
@@ -125,12 +144,36 @@ pub fn define_bitfield_types(_input: TokenStream) -> TokenStream {
       quote!(u64)
     };
 
+    let from_bits = (0..i).map(|j| {
+      quote! {
+        if bits[#j] {
+          value |= 1 << #j;
+        }
+      }
+    });
+
+    let to_bits = (0..i).map(|j| {
+      quote! {
+        (repr & (1 << #j)) != 0
+      }
+    });
+
     defns.push(quote! {
       pub enum #ident {}
       impl Specifier for #ident {
         const BITS: usize = #i;
         type Alignment = checks::#alignment;
         type Repr = #repr;
+
+        fn from_bits(bits: &[bool]) -> Self::Repr {
+          let mut value: Self::Repr = 0;
+          #( #from_bits )*
+          value
+        }
+
+        fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
+          Box::new([ #( #to_bits ),* ])
+        }
       }
     });
   }
@@ -246,24 +289,26 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
       const BITS: usize = #bits;
       type Alignment = checks::#alignment;
       type Repr = #ident;
-    }
 
-    impl BitfieldRepr for #ident {
-      fn from_bits<I: std::iter::Iterator<Item = bool>>(bits: I) -> Self {
-        let value = <#repr as BitfieldRepr>::from_bits(bits);
+      fn from_bits(bits: &[bool]) -> Self::Repr {
+        let value = bits.iter().enumerate().fold(0, |acc, (i, &b)| {
+          acc | (b as #repr) << i
+        });
+
         match value {
-          #( #from_val ),* ,
+          #( #from_val ),*,
           _ => unreachable!(),
         }
       }
 
-      fn to_bits(&self) -> impl Iterator<Item = bool> + '_ {
-        let mut value: dyn BitfieldRepr = match *self {
-          #( #to_val ),*
+      fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
+        let value = match repr {
+          #( #to_val ),*,
         };
 
-        <#repr as BitfieldRepr>::to_bits(&value)
+        (0..#bits).map(|i| (value & (1 << i)) != 0).collect::<Vec<_>>().into_boxed_slice()
       }
+
     }
   }
   .into()
