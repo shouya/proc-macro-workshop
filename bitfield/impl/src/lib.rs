@@ -40,9 +40,9 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
         Self { data }
       }
 
-      fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
+      fn to_bits(repr: Self::Repr) -> Box<[bool]> {
         let mut bits = Vec::with_capacity(Self::BITS);
-        for &byte in &repr.data {
+        for byte in repr.data {
           for i in 0..8 {
             bits.push((byte & (1 << i)) != 0);
           }
@@ -75,7 +75,7 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
 
           let start_bit = { #acc_offset };
           let len = { <#ty as Specifier>::BITS };
-          let bits = <#ty as Specifier>::to_bits(&value);
+          let bits = <#ty as Specifier>::to_bits(value);
           // take(..) is needed because #ty's Repr may be longer than the actual bit width
           for (i, &bit) in bits.iter().take(len).enumerate() {
             self.set_bit(start_bit + i, bit);
@@ -144,22 +144,13 @@ pub fn define_bitfield_types(_input: TokenStream) -> TokenStream {
       quote!(u64)
     };
 
-    let from_bits = (0..i).map(|j| {
-      quote! {
-        if bits[#j] {
-          value |= 1 << #j;
-        }
-      }
-    });
-
-    let to_bits = (0..i).map(|j| {
-      quote! {
-        (repr & (1 << #j)) != 0
-      }
-    });
+    let from_bits = (0..i).map(|j| quote! {if bits[#j] {value |= 1 << #j;}});
+    let to_bits = (0..i).map(|j| quote! {(repr & (1 << #j)) != 0});
 
     defns.push(quote! {
+      // these types are not constructible
       pub enum #ident {}
+
       impl Specifier for #ident {
         const BITS: usize = #i;
         type Alignment = checks::#alignment;
@@ -171,7 +162,7 @@ pub fn define_bitfield_types(_input: TokenStream) -> TokenStream {
           value
         }
 
-        fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
+        fn to_bits(repr: Self::Repr) -> Box<[bool]> {
           Box::new([ #( #to_bits ),* ])
         }
       }
@@ -196,7 +187,6 @@ pub fn impl_specifier_for_primitive_types(_: TokenStream) -> TokenStream {
     let defn = quote! {
       impl Specifier for #ident {
         const BITS: usize = #bits;
-
         // primitive number types are always aligned to 8 bits
         type Alignment = checks::ZeroMod8;
         type Repr = #ident;
@@ -207,7 +197,7 @@ pub fn impl_specifier_for_primitive_types(_: TokenStream) -> TokenStream {
           value
         }
 
-        fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
+        fn to_bits(repr: Self::Repr) -> Box<[bool]> {
           Box::new([ #( #to_bits ),* ])
         }
       }
@@ -279,47 +269,15 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
   };
   let alignment = format_ident!("{}Mod8", num_name(bits % 8));
   let mut from_val = vec![];
-  let mut to_val = vec![];
 
   for variant in variants {
     let variant_ident = &variant.ident;
-    let Some((_eq, syn::Expr::Lit(lit))) = variant.discriminant else {
-      return syn::Error::new_spanned(
-        variant,
-        "expected explicit literal discriminant",
-      )
-      .to_compile_error()
-      .into();
-    };
 
-    let syn::ExprLit {
-      lit: syn::Lit::Int(ref int),
-      ..
-    } = lit
-    else {
-      return syn::Error::new_spanned(
-        lit,
-        "expected integer in discriminant like Variant = 1 or Variant = 0b011",
-      )
-      .to_compile_error()
-      .into();
-    };
-
-    let value = int.base10_parse::<usize>().unwrap();
-    if value >= 1 << bits {
-      return syn::Error::new_spanned(
-        lit,
-        format!(
-          "discriminant value {} is too large for {} bits",
-          value, bits
-        ),
-      )
-      .to_compile_error()
-      .into();
-    }
-
-    from_val.push(quote! { #int => #ident::#variant_ident });
-    to_val.push(quote! { #ident::#variant_ident => #int });
+    from_val.push(quote! {
+      if value == #ident::#variant_ident as #repr {
+        return #ident::#variant_ident;
+      }
+    });
   }
 
   quote! {
@@ -333,17 +291,13 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
           acc | (b as #repr) << i
         });
 
-        match value {
-          #( #from_val ),*,
-          _ => unreachable!(),
-        }
+        #( #from_val )*
+
+        unreachable!("bit pattern does not match any variant")
       }
 
-      fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
-        let value = match repr {
-          #( #to_val ),*,
-        };
-
+      fn to_bits(repr: Self::Repr) -> Box<[bool]> {
+        let value = repr as #repr;
         (0..#bits).map(|i| (value & (1 << i)) != 0).collect::<Vec<_>>().into_boxed_slice()
       }
 

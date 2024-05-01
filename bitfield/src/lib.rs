@@ -33,7 +33,7 @@ pub trait Specifier {
 
   // from LSB to MSB
   fn from_bits(bits: &[bool]) -> Self::Repr;
-  fn to_bits(repr: &Self::Repr) -> Box<[bool]>;
+  fn to_bits(repr: Self::Repr) -> Box<[bool]>;
 }
 
 impl Specifier for bool {
@@ -45,8 +45,8 @@ impl Specifier for bool {
     bits[0]
   }
 
-  fn to_bits(repr: &Self::Repr) -> Box<[bool]> {
-    Box::new([*repr])
+  fn to_bits(repr: Self::Repr) -> Box<[bool]> {
+    Box::new([repr])
   }
 }
 
