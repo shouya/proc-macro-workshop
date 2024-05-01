@@ -9,15 +9,11 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
   let struct_name = &input.ident;
 
   let mut total_bits = vec![];
-  let mut alignment = quote!(::bitfield::checks::ZeroMod8);
   let mut bits_checkers = vec![];
 
   for field in &input.fields {
     let ty = &field.ty;
     total_bits.push(quote! { <#ty as Specifier>::BITS });
-    alignment = quote! {
-        <#alignment as ::bitfield::checks::CyclicAdd<<#ty as Specifier>::Alignment>>::O
-    };
 
     // TODO: convert this unwrap into compile error
     if let Some(int) = get_attr_lit(&field.attrs, "bits").unwrap() {
@@ -36,8 +32,9 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
   };
 
   let mut checks = bits_checkers;
+  let total_bit_arr = quote!([(); (#(#total_bits)+*) % 8]);
   checks.push(quote! {
-    #alignment : ::bitfield::checks::TotalSizeIsMultipleOfEightBits
+    #total_bit_arr : ::bitfield::checks::TotalSizeIsMultipleOfEightBits
   });
 
   let impl_specifier = quote! {
@@ -45,7 +42,6 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
     where #( #checks ),*
     {
       const BITS: usize = { #(#total_bits)+* };
-      type Alignment = #alignment;
       type Repr = #struct_name;
 
       fn from_bits(bits: &[bool]) -> Self::Repr {
@@ -149,9 +145,8 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn define_bitfield_types(_input: TokenStream) -> TokenStream {
   let mut defns = vec![];
 
-  for i in 1..=64 {
+  for i in 1usize..=64 {
     let ident = format_ident!("B{}", i);
-    let alignment = format_ident!("{}Mod8", num_name(i % 8));
     let repr = if i <= 8 {
       quote!(u8)
     } else if i <= 16 {
@@ -171,7 +166,6 @@ pub fn define_bitfield_types(_input: TokenStream) -> TokenStream {
 
       impl Specifier for #ident {
         const BITS: usize = #i;
-        type Alignment = checks::#alignment;
         type Repr = #repr;
 
         fn from_bits(bits: &[bool]) -> Self::Repr {
@@ -205,8 +199,6 @@ pub fn impl_specifier_for_primitive_types(_: TokenStream) -> TokenStream {
     let defn = quote! {
       impl Specifier for #ident {
         const BITS: usize = #bits;
-        // primitive number types are always aligned to 8 bits
-        type Alignment = checks::ZeroMod8;
         type Repr = #ident;
 
         fn from_bits(bits: &[bool]) -> Self::Repr {
@@ -222,32 +214,6 @@ pub fn impl_specifier_for_primitive_types(_: TokenStream) -> TokenStream {
     };
 
     defns.push(defn);
-  }
-
-  quote! {
-    #(#defns)*
-  }
-  .into()
-}
-
-#[proc_macro]
-pub fn define_cyclic_add(_: TokenStream) -> TokenStream {
-  let mut defns = vec![];
-
-  for a in 0..8 {
-    for b in 0..8 {
-      let a_name = format_ident!("{}Mod8", num_name(a));
-      let b_name = format_ident!("{}Mod8", num_name(b));
-      let sum_name = format_ident!("{}Mod8", num_name((a + b) % 8));
-
-      let defn = quote! {
-         impl CyclicAdd<#a_name> for #b_name {
-           type O = #sum_name;
-         }
-      };
-
-      defns.push(defn);
-    }
   }
 
   quote! {
@@ -286,7 +252,6 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
   } else {
     quote!(u64)
   };
-  let alignment = format_ident!("{}Mod8", num_name(bits % 8));
   let mut from_val = vec![];
   let mut discriminant_checks = vec![];
 
@@ -312,7 +277,6 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
       #( #discriminant_checks ),*
     {
       const BITS: usize = #bits;
-      type Alignment = checks::#alignment;
       type Repr = #ident;
 
       fn from_bits(bits: &[bool]) -> Self::Repr {
@@ -332,20 +296,6 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
 
     }
   }.into()
-}
-
-fn num_name(n: usize) -> &'static str {
-  match n {
-    0 => "Zero",
-    1 => "One",
-    2 => "Two",
-    3 => "Three",
-    4 => "Four",
-    5 => "Five",
-    6 => "Six",
-    7 => "Seven",
-    _ => unreachable!(),
-  }
 }
 
 fn get_attr_lit(

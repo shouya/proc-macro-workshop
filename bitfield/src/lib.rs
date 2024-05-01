@@ -20,10 +20,6 @@ use bitfield_impl::{
 pub trait Specifier {
   const BITS: usize;
 
-  // One of XMod8 types from checks module. Used for checking
-  // alignment on compile time.
-  type Alignment;
-
   // The narrowest integer type that can hold the number of bits, or
   // [u8; N]
   type Repr;
@@ -38,7 +34,6 @@ pub trait Specifier {
 
 impl Specifier for bool {
   const BITS: usize = 1;
-  type Alignment = checks::OneMod8;
   type Repr = bool;
 
   fn from_bits(bits: &[bool]) -> Self::Repr {
@@ -63,26 +58,8 @@ pub mod checks {
 
   use private::Sealed;
 
-  // check for field alignment
-  impl Sealed for ZeroMod8 {}
-
-  pub trait CyclicAdd<A> {
-    type O;
-  }
-
-  pub enum ZeroMod8 {}
-  pub enum OneMod8 {}
-  pub enum TwoMod8 {}
-  pub enum ThreeMod8 {}
-  pub enum FourMod8 {}
-  pub enum FiveMod8 {}
-  pub enum SixMod8 {}
-  pub enum SevenMod8 {}
-
-  bitfield_impl::define_cyclic_add!();
-
   pub trait TotalSizeIsMultipleOfEightBits: Sealed {}
-  impl TotalSizeIsMultipleOfEightBits for ZeroMod8 {}
+  impl TotalSizeIsMultipleOfEightBits for [(); 0] {}
 
   // check for enum discriminant range
   pub enum False {}

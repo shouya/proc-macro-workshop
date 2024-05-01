@@ -1,9 +1,9 @@
-error[E0277]: the trait bound `SevenMod8: TotalSizeIsMultipleOfEightBits` is not satisfied
+error[E0277]: the trait bound `[(); 7]: TotalSizeIsMultipleOfEightBits` is not satisfied
   --> tests/04-multiple-of-8bits.rs:53:1
    |
 53 | #[bitfield]
-   | ^^^^^^^^^^^ the trait `TotalSizeIsMultipleOfEightBits` is not implemented for `SevenMod8`
+   | ^^^^^^^^^^^ the trait `TotalSizeIsMultipleOfEightBits` is not implemented for `[(); 7]`
    |
-   = help: the trait `TotalSizeIsMultipleOfEightBits` is implemented for `ZeroMod8`
+   = help: the trait `TotalSizeIsMultipleOfEightBits` is implemented for `[(); 0]`
    = help: see issue #48214
    = note: this error originates in the attribute macro `bitfield` (in Nightly builds, run with -Z macro-backtrace for more info)
