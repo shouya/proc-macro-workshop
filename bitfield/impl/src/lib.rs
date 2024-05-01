@@ -1,4 +1,5 @@
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{parse_macro_input, DataEnum, DeriveInput, ItemStruct};
 
@@ -249,9 +250,9 @@ pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
   };
 
   if !variants.len().is_power_of_two() {
-    return syn::Error::new_spanned(
-      ident,
-      "expected a power of two number of variants",
+    return syn::Error::new(
+      Span::call_site(),
+      "BitfieldSpecifier expected a number of variants which is a power of 2",
     )
     .to_compile_error()
     .into();
