@@ -10,7 +10,10 @@
 //
 // From the perspective of a user of this crate, they get all the necessary APIs
 // (macro, trait, struct) through the one bitfield crate.
-pub use bitfield_impl::{bitfield, define_bitfield_types};
+pub use bitfield_impl::bitfield;
+pub use bitfield_impl::BitfieldSpecifier;
+
+use bitfield_impl::define_bitfield_types;
 
 pub trait Specifier {
   const BITS: usize;
@@ -26,17 +29,13 @@ pub trait Specifier {
 
 define_bitfield_types!();
 
-mod bitfield_repr {
-  pub trait Sealed {}
-
-  impl Sealed for u8 {}
-  impl Sealed for u16 {}
-  impl Sealed for u32 {}
-  impl Sealed for u64 {}
-  impl<const N: usize> Sealed for [u8; N] {}
+impl Specifier for bool {
+  const BITS: usize = 1;
+  type Alignment = checks::OneMod8;
+  type Repr = bool;
 }
 
-pub trait BitfieldRepr: bitfield_repr::Sealed {
+pub trait BitfieldRepr {
   // from LSB to MSB
   fn from_bits<I: std::iter::Iterator<Item = bool>>(bits: I) -> Self;
 
@@ -63,6 +62,16 @@ macro_rules! define_bitfield_repr {
       }
     }
   };
+}
+
+impl BitfieldRepr for bool {
+  fn from_bits<I: std::iter::Iterator<Item = bool>>(mut bits: I) -> Self {
+    bits.next().unwrap_or(false)
+  }
+
+  fn to_bits(&self) -> impl Iterator<Item = bool> + '_ {
+    std::iter::once(*self)
+  }
 }
 
 define_bitfield_repr!(u8, 8);

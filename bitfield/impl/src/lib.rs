@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, ItemStruct};
+use syn::{parse_macro_input, DataEnum, DeriveInput, ItemStruct};
 
 #[proc_macro_attribute]
 pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -51,7 +51,8 @@ pub fn bitfield(_args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         fn #set_field(&mut self, value: <#ty as Specifier>::Repr) {
-          assert!(value < (1 << <#ty as Specifier>::BITS));
+          // TODO: value may not be numerical value (e.g. enum variant)
+          // assert!(value < (1 << <#ty as Specifier>::BITS));
 
           let start_bit = { #acc_offset };
           let len = { <#ty as Specifier>::BITS };
@@ -162,6 +163,108 @@ pub fn define_cyclic_add(_: TokenStream) -> TokenStream {
 
   quote! {
     #(#defns)*
+  }
+  .into()
+}
+
+#[proc_macro_derive(BitfieldSpecifier)]
+pub fn derive_bitfield_specifier(input: TokenStream) -> TokenStream {
+  let DeriveInput { ident, data, .. } =
+    parse_macro_input!(input as DeriveInput);
+  let syn::Data::Enum(DataEnum { variants, .. }) = data else {
+    return syn::Error::new_spanned(ident, "expected enum")
+      .to_compile_error()
+      .into();
+  };
+
+  if !variants.len().is_power_of_two() {
+    return syn::Error::new_spanned(
+      ident,
+      "expected a power of two number of variants",
+    )
+    .to_compile_error()
+    .into();
+  }
+
+  let bits = variants.len().trailing_zeros() as usize;
+  let repr = if bits <= 8 {
+    quote!(u8)
+  } else if bits <= 16 {
+    quote!(u16)
+  } else if bits <= 32 {
+    quote!(u32)
+  } else {
+    quote!(u64)
+  };
+  let alignment = format_ident!("{}Mod8", num_name(bits % 8));
+  let mut from_val = vec![];
+  let mut to_val = vec![];
+
+  for variant in variants {
+    let variant_ident = &variant.ident;
+    let Some((_eq, syn::Expr::Lit(lit))) = variant.discriminant else {
+      return syn::Error::new_spanned(
+        variant,
+        "expected explicit literal discriminant",
+      )
+      .to_compile_error()
+      .into();
+    };
+
+    let syn::ExprLit {
+      lit: syn::Lit::Int(ref int),
+      ..
+    } = lit
+    else {
+      return syn::Error::new_spanned(
+        lit,
+        "expected integer in discriminant like Variant = 1 or Variant = 0b011",
+      )
+      .to_compile_error()
+      .into();
+    };
+
+    let value = int.base10_parse::<usize>().unwrap();
+    if value >= 1 << bits {
+      return syn::Error::new_spanned(
+        lit,
+        format!(
+          "discriminant value {} is too large for {} bits",
+          value, bits
+        ),
+      )
+      .to_compile_error()
+      .into();
+    }
+
+    from_val.push(quote! { #int => #ident::#variant_ident });
+    to_val.push(quote! { #ident::#variant_ident => #int });
+  }
+
+  quote! {
+    impl Specifier for #ident {
+      const BITS: usize = #bits;
+      type Alignment = checks::#alignment;
+      type Repr = #ident;
+    }
+
+    impl BitfieldRepr for #ident {
+      fn from_bits<I: std::iter::Iterator<Item = bool>>(bits: I) -> Self {
+        let value = <#repr as BitfieldRepr>::from_bits(bits);
+        match value {
+          #( #from_val ),* ,
+          _ => unreachable!(),
+        }
+      }
+
+      fn to_bits(&self) -> impl Iterator<Item = bool> + '_ {
+        let mut value: dyn BitfieldRepr = match *self {
+          #( #to_val ),*
+        };
+
+        <#repr as BitfieldRepr>::to_bits(&value)
+      }
+    }
   }
   .into()
 }
