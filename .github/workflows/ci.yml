@@ -43,9 +43,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - uses: dtolnay/install@cargo-outdated
-      - run: git fetch origin --unshallow refs/solution/${{matrix.project}} HEAD
-      - run: git rev-parse FETCH_HEAD
-      - run: git rebase HEAD FETCH_HEAD
       - run: cargo test
         working-directory: ${{matrix.project}}
       - run: cargo outdated --exit-code 1
